@@ -11,13 +11,14 @@ import (
 func main() {
 
 	//if len(os.Args) == 1 && os.Args[0] == "init" {
-		// if err := sandbox.StartSandBox(); err != nil {
-		if err := tui.StartTUI(); err!=nil{
-			logger.Error(err)
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
+	// if err := sandbox.StartSandBox(); err != nil {
+
+	if err := tui.Run(); err != nil {
+		logger.Error(err)
+		os.Exit(1)
+	} else {
+		os.Exit(0)
+	}
 	//}
 
 	if err := cmd.Execute(); err != nil {
