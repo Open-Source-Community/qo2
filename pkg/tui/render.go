@@ -1,174 +1,8 @@
-// package tui
-
-// import (
-// 	"fmt"
-
-// 	"github.com/charmbracelet/bubbles/progress"
-// 	"github.com/charmbracelet/bubbles/textarea"
-// 	"github.com/charmbracelet/bubbles/viewport"
-// 	tea "github.com/charmbracelet/bubbletea"
-// 	"github.com/charmbracelet/lipgloss"
-// )
-
-// // styling and formatting
-// const (
-// 	maxWidth            = 50
-// 	hexBlue      string = "68b0f4"
-// 	hexLightBlue string = "bddfff"
-// )
-
-// var (
-// 	containerStyle = lipgloss.NewStyle().
-// 			Margin(2)
-// 	boldStyle = lipgloss.NewStyle().
-// 			Foreground(lipgloss.Color("#" + hexBlue)).
-// 			Bold(true)
-// 	subtleStyle = lipgloss.NewStyle().
-// 			Foreground(lipgloss.Color("#" + hexLightBlue))
-// 	borderStyle = lipgloss.NewStyle().
-// 			Foreground(lipgloss.Color("#" + hexBlue)).
-// 			Border(lipgloss.RoundedBorder())
-// 	questionStyle = lipgloss.NewStyle().Width(maxWidth)
-// )
-
-// // question handling
-// type Question struct {
-// 	text   string
-// 	answer string
-// }
-// type QuestionSet struct {
-// 	title        string
-// 	instructions string
-// 	questions    []Question
-// }
-
-// // bubbletea
-
-// type model struct {
-// 	textarea        textarea.Model
-// 	progress        progress.Model
-// 	viewport        viewport.Model
-// 	questionSet     QuestionSet
-// 	currentQuestion int
-// }
-
-// func initialModel() model {
-// 	questionSet := QuestionSet{
-// 		title:        "Moving and Renaming",
-// 		instructions: "Write or paste your solution, then click ctrl+s to submit and go to the next question.",
-// 		questions: []Question{
-// 			{text: "What command would you use to rename a directory called \\cd_backup to \\cd?", answer: ""},
-// 			{text: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must be blah blah blah and include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions. l script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must be blah blah blah and include: \n 1- A shebang\n 2- A command line argument parser \n l script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must be blah blah blah and include: \n 1- A shebang\n 2- A command line argument parser \n ", answer: ""},
-// 			{text: "How can we use the find command to rename all files larger than 5Mb to all caps?", answer: ""}},
-// 	}
-
-// 	t := textarea.New()
-// 	t.SetWidth(maxWidth)
-// 	t.ShowLineNumbers = false
-// 	t.Focus()
-
-// 	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
-// 	v := viewport.New(maxWidth, 4)
-// 	return model{progress: p, textarea: t, viewport: v, questionSet: questionSet, currentQuestion: 0}
-// }
-
-// func (m model) Init() tea.Cmd {
-// 	return textarea.Blink
-// }
-
-// func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-// 	var cmds []tea.Cmd
-// 	var cmd tea.Cmd
-
-// 	switch msg := msg.(type) {
-// 	case tea.KeyMsg:
-// 		switch msg.Type {
-// 		case tea.KeyEsc:
-// 			if m.textarea.Focused() {
-// 				m.textarea.Blur()
-// 			}
-// 		case tea.KeyCtrlC:
-// 			return m, tea.Quit
-
-// 		case tea.KeyCtrlS:
-// 			if m.currentQuestion != -1 {
-// 				m.questionSet.questions[m.currentQuestion].answer = m.textarea.Value()
-// 				if m.currentQuestion < len(m.questionSet.questions)-1 {
-// 					m.currentQuestion++
-// 					m.textarea.Reset()
-// 				} else {
-// 					m.currentQuestion = -1
-// 				}
-// 			}
-// 			cmd = m.progress.IncrPercent(float64(1) / float64(len(m.questionSet.questions)))
-// 			cmds = append(cmds, cmd)
-
-// 		default:
-// 			if !m.textarea.Focused() {
-// 				cmd = m.textarea.Focus()
-// 				cmds = append(cmds, cmd)
-// 			}
-// 		}
-// 	case progress.FrameMsg:
-// 		progressModel, cmd := m.progress.Update(msg)
-// 		m.progress = progressModel.(progress.Model)
-// 		return m, cmd
-// 	}
-// 	m.textarea, cmd = m.textarea.Update(msg)
-// 	cmds = append(cmds, cmd)
-
-// 	m.viewport, cmd = m.viewport.Update(msg)
-
-// 	cmds = append(cmds, cmd)
-// 	return m, tea.Batch(cmds...)
-// }
-
-// func (m model) View() string {
-
-// 	if m.currentQuestion == -1 {
-// 		help := "• ctrl+c: quit"
-// 		return containerStyle.Render(
-// 			lipgloss.JoinVertical(lipgloss.Top,
-// 				boldStyle.Render(m.questionSet.title),
-// 				"\n",
-// 				"All done!",
-// 				"\n",
-// 				m.progress.View(),
-// 				"\n",
-// 				help))
-// 	} else {
-// 		prompt := subtleStyle.Render("Answer:")
-// 		help := "• ctrl+s: submit and go to next question\n• ctrl+c: quit"
-// 		m.viewport.SetContent(questionStyle.Render(m.questionSet.questions[m.currentQuestion].text))
-// 		return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
-// 			boldStyle.Render(m.questionSet.title),
-// 			"\n",
-// 			subtleStyle.Render(fmt.Sprintf("Question %d", m.currentQuestion+1)),
-// 			m.viewport.View(),
-// 			"\n",
-// 			subtleStyle.Render(prompt),
-// 			borderStyle.Render(m.textarea.View()),
-// 			"\n",
-// 			m.progress.View(),
-// 			"\n",
-// 			subtleStyle.Render(help),
-// 		))
-// 	}
-// }
-
-// func StartTUI() error {
-// 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-// 	if _, err := p.Run(); err != nil {
-// 		return err
-// 	} else {
-// 		return nil
-// 	}
-
-// }
 package tui
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -199,7 +33,7 @@ var (
 	questionStyle = lipgloss.NewStyle().Width(maxWidth)
 )
 
-// screen types
+// my screens
 type screen int
 
 const (
@@ -207,7 +41,6 @@ const (
 	questionScreen
 )
 
-// Input interface for different answer field types
 type Input interface {
 	Value() string
 	Blur() tea.Msg
@@ -217,7 +50,6 @@ type Input interface {
 	SetValue(string)
 }
 
-// ShortAnswerField implements Input for short text answers
 type ShortAnswerField struct {
 	textinput textinput.Model
 }
@@ -248,7 +80,6 @@ func (sa *ShortAnswerField) View() string {
 	return sa.textinput.View()
 }
 
-// LongAnswerField implements Input for long text answers
 type LongAnswerField struct {
 	textarea textarea.Model
 }
@@ -279,11 +110,10 @@ func (la *LongAnswerField) View() string {
 	return la.textarea.View()
 }
 
-// factory functions
 func newLongAnswerField() *LongAnswerField {
 	ta := textarea.New()
 	ta.SetWidth(maxWidth)
-	ta.Placeholder = "Type your answer here... (ctrl+s to submit)"
+	ta.Placeholder = "Type your answer here..."
 	ta.ShowLineNumbers = false
 	ta.Focus()
 	return &LongAnswerField{ta}
@@ -291,13 +121,12 @@ func newLongAnswerField() *LongAnswerField {
 
 func newShortAnswerField() *ShortAnswerField {
 	ti := textinput.New()
-	ti.Placeholder = "Type your answer here... (ctrl+s to submit)"
+	ti.Placeholder = "Type your answer here..."
 	ti.Width = maxWidth
 	ti.Focus()
 	return &ShortAnswerField{ti}
 }
 
-// Question
 type Question struct {
 	text   string
 	answer string
@@ -323,7 +152,6 @@ type QuestionSet struct {
 	questions    []Question
 }
 
-// Styles
 type styles struct {
 	BorderColor lipgloss.Color
 	InputField  lipgloss.Style
@@ -340,7 +168,7 @@ func defaultStyles() *styles {
 	return s
 }
 
-// Registration info
+// registration info
 type registrationInfo struct {
 	name  string
 	level string
@@ -348,26 +176,21 @@ type registrationInfo struct {
 	email string
 }
 
-// main model
 type model struct {
-	// UI Components
 	progress progress.Model
 	viewport viewport.Model
 	styles   *styles
 
-	// Data
 	questionSet        QuestionSet
 	registration       registrationInfo
 	registrationFields []Input
 
-	// State
 	currentQuestion int
 	screen          screen
 	registrationIdx int
 }
 
 func initialModel() model {
-	// Registration fields
 	regFields := []Input{
 		newShortAnswerField(),
 		newShortAnswerField(),
@@ -375,7 +198,6 @@ func initialModel() model {
 		newShortAnswerField(),
 	}
 
-	// Questions
 	questions := []Question{
 		newQuestion("What command would you use to rename a directory called \\cd_backup to \\cd?", false),
 		newQuestion("Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions.", true),
@@ -427,14 +249,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd = m.registrationFields[m.registrationIdx].Focus()
 					cmds = append(cmds, cmd)
 				} else {
-					// Save registration
+					// save registration
 					m.registration.name = m.registrationFields[0].Value()
 					m.registration.level = m.registrationFields[1].Value()
 					m.registration.id = m.registrationFields[2].Value()
 					m.registration.email = m.registrationFields[3].Value()
 
-					// Optional: log to file if desired; here we ignore
-					// Switch to questions
+					log.Printf("Registration: name=%s, level=%s, id=%s, email=%s",
+						m.registration.name, m.registration.level,
+						m.registration.id, m.registration.email)
+
+					// switch to questions
 					m.screen = questionScreen
 					if len(m.questionSet.questions) > 0 {
 						cmd = m.questionSet.questions[0].input.Focus()
@@ -449,15 +274,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					current := &m.questionSet.questions[m.currentQuestion]
 					current.answer = current.input.Value()
 
+					log.Printf("Question %d: %q -> %q",
+						m.currentQuestion+1, current.text, current.answer)
+
 					if m.currentQuestion < len(m.questionSet.questions)-1 {
 						m.currentQuestion++
 						cmd = m.questionSet.questions[m.currentQuestion].input.Focus()
 						cmds = append(cmds, cmd)
 					} else {
 						m.currentQuestion = -1
+						log.Printf("All questions completed.")
 					}
 
-					progressValue := float64(m.currentQuestion+1) / float64(len(m.questionSet.questions))
+					progressValue := float64(m.currentQuestion) / float64(len(m.questionSet.questions))
 					if m.currentQuestion == -1 {
 						progressValue = 1.0
 					}
@@ -471,7 +300,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 	}
 
-	// Update current input
 	if m.screen == registrationScreen && m.registrationIdx < len(m.registrationFields) {
 		var inputCmd tea.Cmd
 		m.registrationFields[m.registrationIdx], inputCmd = m.registrationFields[m.registrationIdx].Update(msg)
@@ -484,12 +312,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, inputCmd)
 	}
 
-	// Update progress (generic)
 	progressModel, cmd := m.progress.Update(msg)
 	m.progress = progressModel.(progress.Model)
 	cmds = append(cmds, cmd)
 
-	// Update viewport
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
@@ -569,16 +395,15 @@ func (m model) questionView() string {
 	}
 }
 
-// Run starts the TUI application. It returns an error if the program fails.
-func Run() error {
-	// Optional: set up logging to a file for debugging
-	// f, err := tea.LogToFile("debug.log", "DBG: ")
-	// if err != nil {
-	// 	return err
-	// }
-	// defer f.Close()
+func StartTUI() error {
+
+	f, err := tea.LogToFile("debug.log", "DBG: ")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
