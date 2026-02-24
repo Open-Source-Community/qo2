@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -12,6 +15,146 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////
+const (
+	logFile   = "debug.log"
+	stateFile = "state.json"
+)
+
+type PersistedState struct {
+	Version         int              `json:"version"`
+	Registration    registrationInfo `json:"registration"`
+	Answers         []string         `json:"answers"`
+	CurrentQuestion int              `json:"current_question"`
+	Completed       bool             `json:"completed"`
+	LastUpdated     time.Time        `json:"last_updated"`
+}
+
+func saveState(m model) {
+	state := PersistedState{
+		Version:         1,
+		Registration:    m.registration,
+		CurrentQuestion: m.currentQuestion,
+		Completed:       m.currentQuestion == -1,
+		LastUpdated:     time.Now(),
+	}
+
+	state.Answers = make([]string, 0, len(m.questionSet.questions))
+	for _, q := range m.questionSet.questions {
+		state.Answers = append(state.Answers, q.answer)
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		log.Printf("state save failed: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(stateFile, data, 0644); err != nil {
+		log.Printf("state write failed: %v", err)
+	}
+}
+
+func loadState(m model) model {
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		log.Printf("no previous state found")
+		return m
+	}
+
+	var state PersistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		log.Printf("state parse error: %v", err)
+		return m
+	}
+
+	m.registration = state.Registration
+
+	fields := []string{
+		state.Registration.name,
+		state.Registration.level,
+		state.Registration.id,
+		state.Registration.email,
+	}
+
+	for i := range m.registrationFields {
+		m.registrationFields[i].SetValue(fields[i])
+	}
+	m.currentQuestion = state.CurrentQuestion
+	m.screen = questionScreen
+
+	for i := range m.questionSet.questions {
+		if i < len(state.Answers) {
+			m.questionSet.questions[i].answer = state.Answers[i]
+			m.questionSet.questions[i].input.SetValue(state.Answers[i])
+		}
+	}
+
+	answered := state.CurrentQuestion
+	if answered < 0 {
+		answered = len(m.questionSet.questions)
+	}
+
+	m.progress.SetPercent(
+		float64(answered) / float64(len(m.questionSet.questions)),
+	)
+
+	m.restoreProgress = true
+
+	log.Printf("state restored: question %d", m.currentQuestion)
+	return m
+}
+
+// resume session helper
+func resumeSession(m model) model {
+	m.currentQuestion = 0
+	m.registration = registrationInfo{}
+	m.registrationIdx = 0
+	m.progress.SetPercent(0)
+
+	for i := range m.registrationFields {
+		m.registrationFields[i].SetValue("")
+	}
+	for i := range m.questionSet.questions {
+		m.questionSet.questions[i].answer = ""
+		m.questionSet.questions[i].input.SetValue("")
+	}
+
+	_ = os.Remove(stateFile)
+	return m
+}
+
+func (m model) restoreView() string {
+	options := []string{
+		"Resume previous session",
+		"Start a new session",
+	}
+
+	var lines []string
+	for i, opt := range options {
+		cursor := "  "
+		if i == m.restoreChoice {
+			cursor = "> "
+		}
+		lines = append(lines, cursor+opt)
+	}
+
+	help := "• ↑/↓ to choose • Enter to confirm • ctrl+c to quit"
+
+	return containerStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Top,
+			boldStyle.Render("Previous session found"),
+			"\n",
+			subtleStyle.Render("What would you like to do?"),
+			"\n",
+			lipgloss.JoinVertical(lipgloss.Left, lines...),
+			"\n",
+			subtleStyle.Render(help),
+		),
+	)
+}
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////
 // styling and formatting
 const (
 	maxWidth            = 50
@@ -37,7 +180,8 @@ var (
 type screen int
 
 const (
-	registrationScreen screen = iota
+	restoreScreen screen = iota
+	registrationScreen
 	questionScreen
 )
 
@@ -188,6 +332,9 @@ type model struct {
 	currentQuestion int
 	screen          screen
 	registrationIdx int
+	hasSavedState   bool
+	restoreChoice   int
+	restoreProgress bool
 }
 
 func initialModel() model {
@@ -213,20 +360,38 @@ func initialModel() model {
 	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
 	v := viewport.New(maxWidth, 4)
 
-	return model{
+	m := model{
 		progress:           p,
 		viewport:           v,
 		questionSet:        questionSet,
 		registrationFields: regFields,
-		screen:             registrationScreen,
-		registrationIdx:    0,
-		styles:             defaultStyles(),
+		//screen:             registrationScreen,
+		//registrationIdx:    0,
+		styles: defaultStyles(),
 	}
+
+	if data, err := os.ReadFile(stateFile); err == nil {
+		var state PersistedState
+		if json.Unmarshal(data, &state) == nil && !state.Completed {
+			m.hasSavedState = true
+			m.screen = restoreScreen
+		} else {
+			_ = os.Remove(stateFile)
+			m.screen = registrationScreen
+		}
+	} else {
+		m.screen = registrationScreen
+	}
+
+	return m
 }
 
 func (m model) Init() tea.Cmd {
+	if m.screen == questionScreen && m.currentQuestion >= 0 {
+		return m.questionSet.questions[m.currentQuestion].input.Focus()
+	}
 	if len(m.registrationFields) > 0 {
-		return m.registrationFields[0].Focus()
+		return m.registrationFields[m.registrationIdx].Focus()
 	}
 	return nil
 }
@@ -235,10 +400,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
+	if m.screen == restoreScreen {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.restoreChoice > 0 {
+					m.restoreChoice--
+				}
+			case tea.KeyDown:
+				if m.restoreChoice < 1 {
+					m.restoreChoice++
+				}
+			case tea.KeyEnter:
+				if m.restoreChoice == 0 {
+					m = loadState(m)
+				} else {
+					m = resumeSession(m)
+					m.screen = registrationScreen
+				}
+			}
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC:
+			saveState(m)
 			return m, tea.Quit
 
 		case tea.KeyEnter, tea.KeyTab:
@@ -254,6 +444,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.registration.level = m.registrationFields[1].Value()
 					m.registration.id = m.registrationFields[2].Value()
 					m.registration.email = m.registrationFields[3].Value()
+
+					saveState(m)
 
 					log.Printf("Registration: name=%s, level=%s, id=%s, email=%s",
 						m.registration.name, m.registration.level,
@@ -294,10 +486,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, progressCmd)
 				}
 			}
+			saveState(m)
 		}
 
 	case tea.WindowSizeMsg:
 		m.viewport.Width = msg.Width
+		m.viewport.Height = msg.Height / 4
 	}
 
 	if m.screen == registrationScreen && m.registrationIdx < len(m.registrationFields) {
@@ -312,6 +506,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, inputCmd)
 	}
 
+	if m.restoreProgress {
+		answered := m.currentQuestion
+		if answered < 0 {
+			answered = len(m.questionSet.questions)
+		}
+
+		m.progress.SetPercent(
+			float64(answered) / float64(len(m.questionSet.questions)),
+		)
+
+		m.restoreProgress = false
+	}
+
 	progressModel, cmd := m.progress.Update(msg)
 	m.progress = progressModel.(progress.Model)
 	cmds = append(cmds, cmd)
@@ -324,6 +531,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	switch m.screen {
+	case restoreScreen:
+		return m.restoreView()
 	case registrationScreen:
 		return m.registrationView()
 	case questionScreen:
