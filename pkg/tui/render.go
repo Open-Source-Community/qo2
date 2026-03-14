@@ -31,11 +31,7 @@ var (
 	questionStyle = lipgloss.NewStyle().Width(maxWidth)
 )
 
-// question handling
-type Question struct {
-	text   string
-	answer string
-}
+
 type QuestionSet struct {
 	title        string
 	instructions string
