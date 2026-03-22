@@ -1,28 +1,57 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"time"
 
-	"github.com/ahmedYasserM/qo/cmd"
-	"github.com/ahmedYasserM/qo/pkg/logger"
-	"github.com/ahmedYasserM/qo/pkg/tui"
+	"github.com/ahmedYasserM/qo/pkg/sandbox"
+	"github.com/ahmedYasserM/qo/pkg/workflow"
 )
 
+func runWorkflow() {
+	questions := []workflow.Question{
+		{
+			Prompt:    "Create a file named test.txt",
+			TimeLimit: 300 * time.Second,
+		},
+		{
+			Prompt:    "List files in current directory",
+			TimeLimit: 300 * time.Second,
+		},
+	}
+
+	workflow.Run(questions)
+}
+
 func main() {
+	// internal sandbox init
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		persistent := os.Getenv("SANDBOX_PERSISTENT") == "1"
 
-	//if len(os.Args) == 1 && os.Args[0] == "init" {
-	// if err := sandbox.StartSandBox(); err != nil {
+		var err error
+		if persistent {
+			// interactive persistent shell
+			err = sandbox.StartSandBox(true, "")
+		} else {
+			// single-command execution
+			// (dual mode shpuld be allowed in fututre for certain questions)
+			cmd := os.Getenv("SANDBOX_CMD")
+			err = sandbox.StartSandBox(false, cmd)
+		}
 
-	if err := tui.StartTUI(); err != nil {
-		logger.Error(err)
-		os.Exit(1)
-	} else {
-		os.Exit(0)
+		if err != nil {
+			fmt.Println("Sandbox error:", err)
+			os.Exit(1)
+		}
+		return
 	}
-	//}
 
-	if err := cmd.Execute(); err != nil {
-		logger.Error(err)
-		os.Exit(1)
+	// (temporary, before TUI)
+	if len(os.Args) > 1 && os.Args[1] == "workflow" {
+		runWorkflow()
+		return
 	}
+
+	fmt.Println("Usage: qo workflow")
 }

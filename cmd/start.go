@@ -66,7 +66,7 @@ var startCmd = &cobra.Command{
 
 		logger.Success(fmt.Sprintf("%s folder is unpacked and decrypted successfully.", archivePath))
 
-		err := sandbox.StartSandBox()
+		err := sandbox.StartSandBox(true, "")
 
 		return err
 	},
