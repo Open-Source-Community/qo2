@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 type User struct {
@@ -22,7 +24,7 @@ type Session struct {
 	notes      string
 	score      string
 	result     string
-	questions  []Question
+	questionsSet  *QuestionSet
 }
 
 type Question struct {
@@ -36,22 +38,41 @@ type Question struct {
 	source         string
 }
 
-var (
-	db *sql.DB
-)
-
-func initDB(dsnURI string) error {
-
-	dbconn, err := sql.Open("sqlite", dsnURI)
-	defer db.Close()
-	if err != nil {
-		return err
+func (q Question) String() string {
+	// Optional: Map difficulty integers to readable labels
+	diffLabel := "Unknown"
+	switch q.difficulty {
+	case 1:
+		diffLabel = "Easy"
+	case 2:
+		diffLabel = "Medium"
+	case 3:
+		diffLabel = "Hard"
 	}
-	db = dbconn
-	return nil
+
+	return fmt.Sprintf(
+		"[%s] (%s)\nQuestion: %s\nAnswer: %s\nSource: %s",
+		diffLabel,
+		q.topic,
+		q.text,
+		q.answer,
+		q.source,
+	)
 }
 
-func saveUserInfo(user *User) error {
+func initDB(dsnURI string) (*sql.DB, error) {
+	var err error
+	db, err := sql.Open("sqlite", dsnURI)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+    	return nil, err
+    }
+	return db, err
+}
+
+func saveUserInfo(user *User, db *sql.DB) error {
 	// check if student id exists on system
 	// this would be good to do within the form
 	// var id int
@@ -63,18 +84,19 @@ func saveUserInfo(user *User) error {
 	if err != nil {
 		return err
 	}
+	defer stmt.Close()
 	stmt.Exec(user.name, user.email, user.phone, user.year, user.oscian)
-	stmt.Close()
 	return nil
 }
-func generateQuestionSet(title string, instructions string) (*QuestionSet, error) {
+
+func generateQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
 	// for each topic and difficulty, select one question
 	// thus, 3 questions for each topic: easy (1), medium (2) and hard (3)
 	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
 							FROM (
 								SELECT *, ROW_NUMBER() OVER(PARTITION BY topic, difficulty ORDER BY RANDOM()) as rn
 								FROM questions
-								WHERE difficulty IN ('easy', 'medium', 'hard')
+								WHERE difficulty IN ('1', '2', '3')
 							)
 							WHERE rn = 1;`)
 	if err != nil {
@@ -114,26 +136,35 @@ func generateQuestionSet(title string, instructions string) (*QuestionSet, error
 		if _source.Valid {
 			q.source = _source.String
 		}
+		print(q.String())
 		qs = append(qs, q)
+
 	}
 	return &QuestionSet{title: title, instructions: instructions, questions: qs}, nil
 
 }
 
 func InitializeSession(user *User) *Session {
-	initDB("linux.db")
-	saveUserInfo(user)
+	db, err := initDB("linux.db")
+	if err != nil {
+		panic(err)
+	}
+	saveUserInfo(user,db)
 
-	qs, err := generateQuestionSet("Interview", "")
+	qs, err := generateQuestionSet("Interview", "", db)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to generate question set: %s", err))
 	}
 	session := &Session{time: time.Now().Local().Format("DateTime"),
 		user_id:   user.user_id,
-		questions: qs.questions}
+		questionsSet: qs}
 	return session
 }
 
 func SaveSession() {
 
+}
+
+func CloseDB(db *sql.DB){
+	db.Close()
 }

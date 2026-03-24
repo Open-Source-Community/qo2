@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -44,18 +45,17 @@ type model struct {
 	textarea        textarea.Model
 	progress        progress.Model
 	viewport        viewport.Model
-	questionSet     QuestionSet
+	Session 		*Session
+	questionSet     *QuestionSet
 	currentQuestion int
 }
 
 func initialModel() model {
-	questionSet := QuestionSet{
-		title:        "Moving and Renaming",
-		instructions: "Write or paste your solution, then click ctrl+s to submit and go to the next question.",
-		questions: []Question{
-			{text: "What command would you use to rename a directory called \\cd_backup to \\cd?", answer: ""},
-			{text: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must be blah blah blah and include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions. l script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must be blah blah blah and include: \n 1- A shebang\n 2- A command line argument parser \n l script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must be blah blah blah and include: \n 1- A shebang\n 2- A command line argument parser \n ", answer: ""},
-			{text: "How can we use the find command to rename all files larger than 5Mb to all caps?", answer: ""}},
+	session:= InitializeSession(&User{name: "Amna",user_id: 1, oscian: true,email: "amna@me.com", phone: "111", year: 5})
+
+	questionSet := session.questionsSet
+	if len(questionSet.questions) == 0{
+		log.Fatal("Failed to fetch questions!")
 	}
 
 	t := textarea.New()
