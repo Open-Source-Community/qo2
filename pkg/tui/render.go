@@ -3,9 +3,11 @@ package tui
 import (
 	"fmt"
 	"log"
+	"strconv"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -30,8 +32,8 @@ var (
 			Foreground(lipgloss.Color("#" + hexBlue)).
 			Border(lipgloss.RoundedBorder())
 	questionStyle = lipgloss.NewStyle().Width(maxWidth)
+	
 )
-
 
 type QuestionSet struct {
 	title        string
@@ -39,9 +41,9 @@ type QuestionSet struct {
 	questions    []Question
 }
 
-// bubbletea
+// questions screen
 
-type model struct {
+type questionModel struct {
 	textarea        textarea.Model
 	progress        progress.Model
 	viewport        viewport.Model
@@ -50,8 +52,8 @@ type model struct {
 	currentQuestion int
 }
 
-func initialModel() model {
-	session:= InitializeSession(&User{name: "Amna",user_id: 1, oscian: true,email: "amna@me.com", phone: "111", year: 5})
+func initialQuestionModel(user *User) questionModel {
+	session:= InitializeSession(user)
 
 	questionSet := session.questionsSet
 	if len(questionSet.questions) == 0{
@@ -65,14 +67,14 @@ func initialModel() model {
 
 	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
 	v := viewport.New(maxWidth, 4)
-	return model{progress: p, textarea: t, viewport: v, questionSet: questionSet, currentQuestion: 0}
+	return questionModel{progress: p, textarea: t, viewport: v, questionSet: questionSet, currentQuestion: 0}
 }
 
-func (m model) Init() tea.Cmd {
+func (m questionModel) Init() tea.Cmd {
 	return textarea.Blink
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
@@ -119,7 +121,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m model) View() string {
+func (m questionModel) View() string {
 
 	if m.currentQuestion == -1 {
 		help := "• ctrl+c: quit"
@@ -152,8 +154,140 @@ func (m model) View() string {
 	}
 }
 
+// info form screen
+
+
+type infoModel struct {
+	inputs          []textinput.Model
+	focused         int
+	progress        progress.Model
+	done            bool
+	user            *User
+}
+
+func InitialInfoModel() infoModel {
+	inputs := make([]textinput.Model, 5)
+	
+	inputs[0] = textinput.New()
+	inputs[0].Placeholder = "Full Name"
+	inputs[0].Focus()
+
+	inputs[1] = textinput.New()
+	inputs[1].Placeholder = "Email Address"
+
+	inputs[2] = textinput.New()
+	inputs[2].Placeholder = "Phone Number"
+
+	inputs[3] = textinput.New()
+	inputs[3].Placeholder = "Year (1-4)"
+
+	inputs[4] = textinput.New()
+	inputs[4].Placeholder = "Are you an OSC member? (y/n)"
+
+	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
+
+	return infoModel{
+		inputs:   inputs,
+		focused:  0,
+		progress: p,
+		user:     &User{},
+	}
+}
+
+func (m infoModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m infoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			return m, tea.Quit
+
+		case tea.KeyEnter, tea.KeyTab:
+			if m.focused == len(m.inputs)-1 {
+				m.done = true
+				m.confirmUserInfo()
+				return initialQuestionModel(m.user), nil
+			}
+
+			m.focused++
+			// Progress bar calculation
+			progCmd := m.progress.SetPercent(float64(m.focused) / float64(len(m.inputs)))
+			
+			// Focus the next input
+			for i := range m.inputs {
+				m.inputs[i].Blur()
+			}
+			m.inputs[m.focused].Focus()
+			
+			return m, progCmd
+
+		case tea.KeyShiftTab:
+			if m.focused > 0 {
+				m.focused--
+				for i := range m.inputs {
+					m.inputs[i].Blur()
+				}
+				m.inputs[m.focused].Focus()
+			}
+		}
+	
+	case progress.FrameMsg:
+		progressModel, cmd := m.progress.Update(msg)
+		m.progress = progressModel.(progress.Model)
+		return m, cmd
+	}
+
+	// Update the currently focused input
+	cmd := m.updateInputs(msg)
+	return m, cmd
+}
+
+func (m *infoModel) updateInputs(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.inputs[m.focused], cmd = m.inputs[m.focused].Update(msg)
+	return cmd
+}
+
+func (m *infoModel) confirmUserInfo() {
+	m.user.name = m.inputs[0].Value()
+	m.user.email = m.inputs[1].Value()
+	m.user.phone = m.inputs[2].Value()
+	m.user.year, _ = strconv.Atoi(m.inputs[3].Value())
+	m.user.oscian = m.inputs[4].Value() == "y" || m.inputs[4].Value() == "yes"
+}
+ 
+
+func (m infoModel) View() string {
+	if m.done {
+		return containerStyle.Render(fmt.Sprintf(
+			"%s\n\nProfile Created for %s!",
+			boldStyle.Render(""),
+			m.user.name,
+		))
+	}
+
+	var labels = []string{"Name", "Email", "Phone", "Academic Year", "Oscian?"}
+
+	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
+		boldStyle.Render("Just a few questions before we start!"),
+		"\n",
+		subtleStyle.Render(labels[m.focused]),
+		borderStyle.Render(m.inputs[m.focused].View()),
+		"\n",
+		m.progress.View(),
+		"\n",
+		subtleStyle.Render("• enter: next field • ctrl+c: quit"),
+	))
+}
+// main model
+
+
+
 func StartTUI() error {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(InitialInfoModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return err
 	} else {

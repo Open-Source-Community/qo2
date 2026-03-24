@@ -25,6 +25,7 @@ type Session struct {
 	score      string
 	result     string
 	questionsSet  *QuestionSet
+	db				*sql.DB
 }
 
 type Question struct {
@@ -85,7 +86,10 @@ func saveUserInfo(user *User, db *sql.DB) error {
 		return err
 	}
 	defer stmt.Close()
-	stmt.Exec(user.name, user.email, user.phone, user.year, user.oscian)
+	_, err= stmt.Exec(user.name, user.email, user.phone, user.year, user.oscian)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -157,7 +161,7 @@ func InitializeSession(user *User) *Session {
 	}
 	session := &Session{time: time.Now().Local().Format("DateTime"),
 		user_id:   user.user_id,
-		questionsSet: qs}
+		questionsSet: qs, db: db,}
 	return session
 }
 
