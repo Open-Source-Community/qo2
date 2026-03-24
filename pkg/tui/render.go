@@ -47,7 +47,7 @@ type questionModel struct {
 	textarea        textarea.Model
 	progress        progress.Model
 	viewport        viewport.Model
-	Session 		*Session
+	session 		*Session
 	questionSet     *QuestionSet
 	currentQuestion int
 }
@@ -67,7 +67,7 @@ func initialQuestionModel(user *User) questionModel {
 
 	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
 	v := viewport.New(maxWidth, 4)
-	return questionModel{progress: p, textarea: t, viewport: v, questionSet: questionSet, currentQuestion: 0}
+	return questionModel{progress: p, textarea: t, viewport: v, questionSet: questionSet, currentQuestion: 0, session: session}
 }
 
 func (m questionModel) Init() tea.Cmd {
@@ -89,13 +89,14 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case tea.KeyCtrlS:
-			if m.currentQuestion != -1 {
+			if m.currentQuestion != -1{
 				m.questionSet.questions[m.currentQuestion].answer = m.textarea.Value()
 				if m.currentQuestion < len(m.questionSet.questions)-1 {
 					m.currentQuestion++
 					m.textarea.Reset()
 				} else {
 					m.currentQuestion = -1
+					m.session.SaveSession()
 				}
 			}
 			cmd = m.progress.IncrPercent(float64(1) / float64(len(m.questionSet.questions)))

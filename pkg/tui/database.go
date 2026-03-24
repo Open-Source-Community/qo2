@@ -9,7 +9,7 @@ import (
 )
 
 type User struct {
-	user_id int
+	user_id int64
 	name    string
 	email   string
 	phone   string
@@ -18,8 +18,7 @@ type User struct {
 }
 
 type Session struct {
-	session_id int
-	user_id    int
+	user    *User
 	time       string
 	notes      string
 	score      string
@@ -29,34 +28,32 @@ type Session struct {
 }
 
 type Question struct {
+	// basic data
+	id int
 	text           string
 	topic          string
 	difficulty     int
-	answer         string
+	model_answer         string
+
+	// accompanying scripts
 	test_script    string
 	setup_script   string
 	cleanup_script string
 	source         string
+
+	// non-database fields: response
+	answer string
+	score int
 }
 
 func (q Question) String() string {
-	// Optional: Map difficulty integers to readable labels
-	diffLabel := "Unknown"
-	switch q.difficulty {
-	case 1:
-		diffLabel = "Easy"
-	case 2:
-		diffLabel = "Medium"
-	case 3:
-		diffLabel = "Hard"
-	}
-
 	return fmt.Sprintf(
-		"[%s] (%s)\nQuestion: %s\nAnswer: %s\nSource: %s",
-		diffLabel,
+		"[ID: %d\tDifficulty: %d] (%s)\nQuestion: %s\nModel Answer: %s\nSource: %s",
+		q.id,
+		q.difficulty,
 		q.topic,
 		q.text,
-		q.answer,
+		q.model_answer,
 		q.source,
 	)
 }
@@ -86,7 +83,11 @@ func saveUserInfo(user *User, db *sql.DB) error {
 		return err
 	}
 	defer stmt.Close()
-	_, err= stmt.Exec(user.name, user.email, user.phone, user.year, user.oscian)
+	result, err := stmt.Exec(user.name, user.email, user.phone, user.year, user.oscian)
+	if err != nil {
+		return err
+	}
+	user.user_id, err = result.LastInsertId()
 	if err != nil {
 		return err
 	}
@@ -109,24 +110,23 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 	var (
 		qs                                                             []Question
 		q                                                              Question
-		qid                                                            int
-		_answer, _test_script, _setup_script, _cleanup_script, _source sql.NullString
+		_model_answer, _test_script, _setup_script, _cleanup_script, _source sql.NullString
 	)
 	for rows.Next() {
 		err = rows.Scan(
-			&qid,
+			&q.id,
 			&q.text,
 			&q.topic,
 			&q.difficulty,
-			&_answer,
+			&_model_answer,
 			&_test_script,
 			&_setup_script,
 			&_cleanup_script,
 			&_source,
 		)
 
-		if _answer.Valid {
-			q.answer = _answer.String
+		if _model_answer.Valid {
+			q.model_answer = _model_answer.String
 		}
 		if _test_script.Valid {
 			q.test_script = _test_script.String
@@ -159,13 +159,39 @@ func InitializeSession(user *User) *Session {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to generate question set: %s", err))
 	}
-	session := &Session{time: time.Now().Local().Format("DateTime"),
-		user_id:   user.user_id,
+	session := &Session{time: time.Now().Local().Format(time.RFC3339),
+		user:   user,
 		questionsSet: qs, db: db,}
 	return session
 }
 
-func SaveSession() {
+func (session Session) SaveSession() error {
+	//insert session metadata
+	db:= session.db
+	sessionStmt, err:= db.Prepare("INSERT INTO sessions(user_id, time, notes, score, result) values(?, ?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	result, err:= sessionStmt.Exec(session.user.user_id, session.time, session.notes, session.score, session.result)
+		if err != nil {
+		return err
+	}
+	session_id, err:= result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	//insert submissions
+	submissionStmt, err:= db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
+		if err != nil {
+		return err
+	}
+	for _,question:=range(session.questionsSet.questions){
+		_, err= submissionStmt.Exec(session_id, question.id, question.answer,question.score)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 
 }
 
