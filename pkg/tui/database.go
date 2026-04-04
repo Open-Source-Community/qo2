@@ -18,10 +18,11 @@ type User struct {
 }
 
 type Session struct {
+	id int64
 	user    *User
 	time       string
 	notes      string
-	score      string
+	score      int
 	result     string
 	questionsSet  *QuestionSet
 	db				*sql.DB
@@ -29,7 +30,7 @@ type Session struct {
 
 type Question struct {
 	// basic data
-	id int
+	id int64
 	text           string
 	topic          string
 	difficulty     int
@@ -44,6 +45,7 @@ type Question struct {
 	// non-database fields: response
 	answer string
 	score int
+	result string
 }
 
 func (q Question) String() string {
@@ -57,6 +59,14 @@ func (q Question) String() string {
 		q.source,
 	)
 }
+func (q *Question) gradeWithModelAnswer() {
+	if q.answer==q.model_answer{
+		q.score=1
+	}else{
+		q.score=0
+	}
+}
+
 
 func initDB(dsnURI string) (*sql.DB, error) {
 	var err error
@@ -140,7 +150,6 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 		if _source.Valid {
 			q.source = _source.String
 		}
-		print(q.String())
 		qs = append(qs, q)
 
 	}
@@ -165,7 +174,7 @@ func InitializeSession(user *User) *Session {
 	return session
 }
 
-func (session Session) SaveSession() error {
+func (session *Session) SaveSession() error {
 	//insert session metadata
 	db:= session.db
 	sessionStmt, err:= db.Prepare("INSERT INTO sessions(user_id, time, notes, score, result) values(?, ?, ?, ?, ?)")
@@ -180,16 +189,29 @@ func (session Session) SaveSession() error {
 	if err != nil {
 		return err
 	}
+	session.id= session_id
 	//insert submissions
 	submissionStmt, err:= db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
 		if err != nil {
 		return err
 	}
 	for _,question:=range(session.questionsSet.questions){
+		session.score+=question.score
 		_, err= submissionStmt.Exec(session_id, question.id, question.answer,question.score)
 		if err != nil {
 			return err
 		}
+	}
+	session.result=fmt.Sprintf("%d/%d", session.score, len(session.questionsSet.questions))
+	stmt, err:= session.db.Prepare(`UPDATE sessions 
+								SET score = ?, result = ?
+								WHERE session_id = ?;`)
+	if err != nil {
+		return err
+	}
+	_, err = stmt.Exec(session.score, session.result, session.id)
+	if err != nil {
+		return err
 	}
 	return nil
 

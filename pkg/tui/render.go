@@ -32,6 +32,11 @@ var (
 			Foreground(lipgloss.Color("#" + hexBlue)).
 			Border(lipgloss.RoundedBorder())
 	questionStyle = lipgloss.NewStyle().Width(maxWidth)
+    cardStyle = lipgloss.NewStyle().
+            Border(lipgloss.RoundedBorder()).
+            BorderForeground(lipgloss.Color("#" + hexLightBlue)).
+            Padding(1, 2).
+            MarginTop(1)
 	
 )
 
@@ -91,6 +96,7 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlS:
 			if m.currentQuestion != -1{
 				m.questionSet.questions[m.currentQuestion].answer = m.textarea.Value()
+				m.questionSet.questions[m.currentQuestion].gradeWithModelAnswer()
 				if m.currentQuestion < len(m.questionSet.questions)-1 {
 					m.currentQuestion++
 					m.textarea.Reset()
@@ -125,16 +131,17 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m questionModel) View() string {
 
 	if m.currentQuestion == -1 {
-		help := "• ctrl+c: quit"
-		return containerStyle.Render(
-			lipgloss.JoinVertical(lipgloss.Top,
-				boldStyle.Render(m.questionSet.title),
-				"\n",
-				"All done!",
-				"\n",
-				m.progress.View(),
-				"\n",
-				help))
+        content := lipgloss.JoinVertical(lipgloss.Center,
+            boldStyle.Render("Great job!"),
+            "",
+            "You're all done!",
+            fmt.Sprintf("Final Result: %s", boldStyle.Render(m.session.result)),
+            "",
+            m.progress.View(),
+            "",
+            subtleStyle.Render("press ctrl+c to exit"),
+        )
+        return containerStyle.Render(cardStyle.Align(lipgloss.Center).Render(content))
 	} else {
 		prompt := subtleStyle.Render("Answer:")
 		help := "• ctrl+s: submit and go to next question\n• ctrl+c: quit"
