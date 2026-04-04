@@ -3,6 +3,7 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -60,11 +61,13 @@ func (q Question) String() string {
 	)
 }
 func (q *Question) gradeWithModelAnswer() {
-	if q.answer==q.model_answer{
-		q.score=1
-	}else{
-		q.score=0
-	}
+	userAns := strings.TrimSpace(q.answer)
+    modelAns := strings.TrimSpace(q.model_answer)
+	if strings.EqualFold(userAns, modelAns) {
+        q.score = 1
+    } else {
+        q.score = 0
+    }
 }
 
 
