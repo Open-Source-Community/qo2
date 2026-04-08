@@ -201,7 +201,25 @@ func StartSandBox(persistent bool, command string) error {
 
 				parts := strings.Fields(input)
 				if parts[0] == "cd" && len(parts) > 1 {
-					cwd = parts[1] // update working directory in go
+					var target string
+
+					if len(parts) < 2 {
+						target = "/tmp"
+					} else if filepath.IsAbs(parts[1]) {
+						target = parts[1]
+					} else {
+						target = filepath.Join(cwd, parts[1])
+					}
+
+					target = filepath.Clean(target)
+
+					fi, err := os.Stat(target)
+					if err != nil || !fi.IsDir() {
+						fmt.Println("cd: no such directory:", target)
+						continue // not update cwd
+					}
+
+					cwd = target
 					continue
 				}
 
