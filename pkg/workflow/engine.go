@@ -7,8 +7,7 @@ import (
 
 	//"strings"
 	"time"
-
-	"github.com/ahmedYasserM/qo/pkg/sandbox"
+	//"github.com/ahmedYasserM/qo/pkg/sandbox"
 )
 
 type Question struct {
@@ -26,11 +25,11 @@ func Run(questions []Question) {
 		})
 
 		// start one persistent sandbox session for this question
-		err := sandbox.RunIsolatedSession()
+		// err := sandbox.RunIsolatedSession()
 
-		if err != nil {
-			fmt.Println("Error:", err)
-		}
+		// if err != nil {
+		// 	fmt.Println("Error:", err)
+		// }
 
 		timer.Stop() // stop timer if exits early
 	}
