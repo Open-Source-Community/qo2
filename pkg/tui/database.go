@@ -18,12 +18,16 @@ type User struct {
 }
 
 type Session struct {
+	id int64
 	user    *User
 	time       string
 	notes      string
 	score      string
 	result     string
-	questionsSet  *QuestionSet
+	questionSet  *QuestionSet
+	currentQuestion int
+	currentTopicIndex int
+	currentDifficulty int
 	db				*sql.DB
 }
 
@@ -32,7 +36,7 @@ type Question struct {
 	id int
 	text           string
 	topic          string
-	difficulty     int
+	difficulty     int // starting from zero, this makes the default field initialization (0) work fine
 	model_answer         string
 
 	// accompanying scripts
@@ -94,19 +98,29 @@ func saveUserInfo(user *User, db *sql.DB) error {
 	return nil
 }
 
-func generateQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
-	// for each topic and difficulty, select one question
-	// thus, 3 questions for each topic: easy (1), medium (2) and hard (3)
-	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
-							FROM (
-								SELECT *, ROW_NUMBER() OVER(PARTITION BY topic, difficulty ORDER BY RANDOM()) as rn
-								FROM questions
-								WHERE difficulty IN ('1', '2', '3')
-							)
-							WHERE rn = 1;`)
+// fetches a batch of the given size depending on the session's current difficulty and topic
+func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
+	stmt, err := session.db.Prepare(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
+							FROM questions q
+							WHERE difficulty = ?
+							AND topic = ?
+							AND NOT EXISTS(
+								SELECT 1
+								FROM submissions s
+								WHERE s.question_id = q.question_id
+								AND s.session_id = ?)
+							ORDER BY RANDOM()
+							LIMIT ?`)
 	if err != nil {
 		return nil, err
 	}
+	currentTopic:=session.questionSet.topics[session.currentTopicIndex]
+
+	rows, err := stmt.Query(session.currentDifficulty, currentTopic, session.id, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	var (
 		qs                                                             []Question
 		q                                                              Question
@@ -124,7 +138,6 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 			&_cleanup_script,
 			&_source,
 		)
-
 		if _model_answer.Valid {
 			q.model_answer = _model_answer.String
 		}
@@ -140,53 +153,117 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 		if _source.Valid {
 			q.source = _source.String
 		}
-		print(q.String())
 		qs = append(qs, q)
+	}
+	return qs, nil
+}
+
+
+
+func initializeQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
+	//fetch topics
+	var (
+		topics []string
+		topic sql.NullString)
+
+	rows, err := db.Query(`SELECT DISTINCT topic FROM questions`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := rows.Scan(&topic); err != nil {
+			return nil, err
+		}
+		if topic.Valid {
+            topics = append(topics, topic.String)
+        }
 
 	}
-	return &QuestionSet{title: title, instructions: instructions, questions: qs}, nil
+	if err = rows.Err(); err != nil {
+        return nil, err
+    }
+
+	return &QuestionSet{title: title, instructions: instructions, topics: topics}, nil
 
 }
+
+
 
 func InitializeSession(user *User) *Session {
 	db, err := initDB("linux.db")
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("Failed to connect to db:%s", err))
 	}
 	saveUserInfo(user,db)
 
-	qs, err := generateQuestionSet("Interview", "", db)
+	qs, err := initializeQuestionSet("Interview", "", db)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to generate question set: %s", err))
+		panic(fmt.Sprintf("Failed to initialize question set: %s", err))
 	}
+
 	session := &Session{time: time.Now().Local().Format(time.RFC3339),
 		user:   user,
-		questionsSet: qs, db: db,}
-	return session
-}
+		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 0,}
 
-func (session Session) SaveSession() error {
-	//insert session metadata
-	db:= session.db
+	q, err:= session.fetchQuestionBatch(3)
+	if err != nil {
+		panic(err)
+	}else if len(q)==0{
+		panic("Failed to fetch any questions!")
+	}
+	session.currentQuestion=0
+	session.questionSet.questions=q
+		//insert session metadata
 	sessionStmt, err:= db.Prepare("INSERT INTO sessions(user_id, time, notes, score, result) values(?, ?, ?, ?, ?)")
 	if err != nil {
-		return err
+		panic("Failed to initialize session")
 	}
 	result, err:= sessionStmt.Exec(session.user.user_id, session.time, session.notes, session.score, session.result)
 		if err != nil {
-		return err
+			panic("Failed to initialize session")
+
 	}
-	session_id, err:= result.LastInsertId()
-	if err != nil {
-		return err
+	session_id, _:= result.LastInsertId()
+
+	session.id=session_id
+	return session
+}
+
+func (session *Session) IncreaseDifficulty(reverse bool){
+	if reverse{
+		if session.currentDifficulty > 0{
+			session.currentDifficulty--
+		}
+	}else
+	{
+		if session.currentDifficulty < 2{
+			session.currentDifficulty++
+		}
 	}
+}
+
+func (session *Session) AdvanceTopic(reverse bool){
+	if reverse{
+		if session.currentTopicIndex > 0{
+			session.currentTopicIndex--
+		}
+	}else
+	{
+		if session.currentTopicIndex < len(session.questionSet.topics){
+			session.currentTopicIndex++
+		}
+	}
+}
+
+func (session *Session) SaveSession() error {
 	//insert submissions
-	submissionStmt, err:= db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
+	submissionStmt, err:= session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
 		if err != nil {
 		return err
 	}
-	for _,question:=range(session.questionsSet.questions){
-		_, err= submissionStmt.Exec(session_id, question.id, question.answer,question.score)
+	for _,question:=range(session.questionSet.questions){
+		_, err= submissionStmt.Exec(session.id, question.id, question.answer,question.score)
 		if err != nil {
 			return err
 		}

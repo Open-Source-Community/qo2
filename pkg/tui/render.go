@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -38,7 +37,9 @@ var (
 type QuestionSet struct {
 	title        string
 	instructions string
+	topics []string
 	questions    []Question
+
 }
 
 // questions screen
@@ -48,17 +49,10 @@ type questionModel struct {
 	progress        progress.Model
 	viewport        viewport.Model
 	session 		*Session
-	questionSet     *QuestionSet
-	currentQuestion int
 }
 
 func initialQuestionModel(user *User) questionModel {
 	session:= InitializeSession(user)
-
-	questionSet := session.questionsSet
-	if len(questionSet.questions) == 0{
-		log.Fatal("Failed to fetch questions!")
-	}
 
 	t := textarea.New()
 	t.SetWidth(maxWidth)
@@ -67,7 +61,7 @@ func initialQuestionModel(user *User) questionModel {
 
 	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
 	v := viewport.New(maxWidth, 4)
-	return questionModel{progress: p, textarea: t, viewport: v, questionSet: questionSet, currentQuestion: 0, session: session}
+	return questionModel{progress: p, textarea: t, viewport: v, session: session}
 }
 
 func (m questionModel) Init() tea.Cmd {
@@ -89,18 +83,16 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case tea.KeyCtrlS:
-			if m.currentQuestion != -1{
-				m.questionSet.questions[m.currentQuestion].answer = m.textarea.Value()
-				if m.currentQuestion < len(m.questionSet.questions)-1 {
-					m.currentQuestion++
+			if m.session.currentQuestion != -1{
+				m.session.questionSet.questions[m.session.currentQuestion].answer = m.textarea.Value()
+				if m.session.currentQuestion < len(m.session.questionSet.questions)-1 {
+					m.session.currentQuestion++
 					m.textarea.Reset()
 				} else {
-					m.currentQuestion = -1
+					m.session.currentQuestion = -1
 					m.session.SaveSession()
 				}
 			}
-			cmd = m.progress.IncrPercent(float64(1) / float64(len(m.questionSet.questions)))
-			cmds = append(cmds, cmd)
 
 		default:
 			if !m.textarea.Focused() {
@@ -108,10 +100,6 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
-	case progress.FrameMsg:
-		progressModel, cmd := m.progress.Update(msg)
-		m.progress = progressModel.(progress.Model)
-		return m, cmd
 	}
 	m.textarea, cmd = m.textarea.Update(msg)
 	cmds = append(cmds, cmd)
@@ -124,31 +112,28 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m questionModel) View() string {
 
-	if m.currentQuestion == -1 {
+	if m.session.currentQuestion == -1 {
 		help := "• ctrl+c: quit"
 		return containerStyle.Render(
 			lipgloss.JoinVertical(lipgloss.Top,
-				boldStyle.Render(m.questionSet.title),
+				boldStyle.Render(m.session.questionSet.title),
 				"\n",
 				"All done!",
 				"\n",
-				m.progress.View(),
 				"\n",
 				help))
 	} else {
 		prompt := subtleStyle.Render("Answer:")
 		help := "• ctrl+s: submit and go to next question\n• ctrl+c: quit"
-		m.viewport.SetContent(questionStyle.Render(m.questionSet.questions[m.currentQuestion].text))
+		m.viewport.SetContent(questionStyle.Render(m.session.questionSet.questions[m.session.currentQuestion].text))
 		return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
-			boldStyle.Render(m.questionSet.title),
+			boldStyle.Render(m.session.questionSet.title),
 			"\n",
-			subtleStyle.Render(fmt.Sprintf("Question %d", m.currentQuestion+1)),
+			subtleStyle.Render(fmt.Sprintf("Question %d", m.session.currentQuestion+1)),
 			m.viewport.View(),
 			"\n",
 			subtleStyle.Render(prompt),
 			borderStyle.Render(m.textarea.View()),
-			"\n",
-			m.progress.View(),
 			"\n",
 			subtleStyle.Render(help),
 		))
@@ -161,7 +146,6 @@ func (m questionModel) View() string {
 type infoModel struct {
 	inputs          []textinput.Model
 	focused         int
-	progress        progress.Model
 	done            bool
 	user            *User
 }
@@ -185,12 +169,10 @@ func InitialInfoModel() infoModel {
 	inputs[4] = textinput.New()
 	inputs[4].Placeholder = "Are you an OSC member? (y/n)"
 
-	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
 
 	return infoModel{
 		inputs:   inputs,
 		focused:  0,
-		progress: p,
 		user:     &User{},
 	}
 }
@@ -214,16 +196,13 @@ func (m infoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.focused++
-			// Progress bar calculation
-			progCmd := m.progress.SetPercent(float64(m.focused) / float64(len(m.inputs)))
-			
 			// Focus the next input
 			for i := range m.inputs {
 				m.inputs[i].Blur()
 			}
 			m.inputs[m.focused].Focus()
 			
-			return m, progCmd
+			return m, nil
 
 		case tea.KeyShiftTab:
 			if m.focused > 0 {
@@ -234,11 +213,6 @@ func (m infoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputs[m.focused].Focus()
 			}
 		}
-	
-	case progress.FrameMsg:
-		progressModel, cmd := m.progress.Update(msg)
-		m.progress = progressModel.(progress.Model)
-		return m, cmd
 	}
 
 	// Update the currently focused input
@@ -278,7 +252,6 @@ func (m infoModel) View() string {
 		subtleStyle.Render(labels[m.focused]),
 		borderStyle.Render(m.inputs[m.focused].View()),
 		"\n",
-		m.progress.View(),
 		"\n",
 		subtleStyle.Render("• enter: next field • ctrl+c: quit"),
 	))
