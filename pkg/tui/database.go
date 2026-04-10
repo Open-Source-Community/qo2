@@ -2,6 +2,7 @@ package tui
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -98,7 +99,12 @@ func saveUserInfo(user *User, db *sql.DB) error {
 	return nil
 }
 
-// fetches a batch of the given size depending on the session's current difficulty and topic
+// Fetches a question batch of the given size depending on the session's current difficulty and topic.
+// NOTE: this is currently used with batchSize=1. If this is eventually changed, make sure to handle
+// the remaining questions in the batch. Do you want to immediately discard them and switch to 
+// the new topic/difficulty? Do you want to add  them to submissions even if they were
+// discarded before they were displayed?
+// I leave this chore to you, kind successor :D
 func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
 	stmt, err := session.db.Prepare(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
 							FROM questions q
@@ -114,7 +120,7 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
 	if err != nil {
 		return nil, err
 	}
-	currentTopic:=session.questionSet.topics[session.currentTopicIndex]
+	currentTopic:=session.GetCurrentTopic()
 
 	rows, err := stmt.Query(session.currentDifficulty, currentTopic, session.id, batchSize)
 	if err != nil {
@@ -154,6 +160,9 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
 			q.source = _source.String
 		}
 		qs = append(qs, q)
+	}
+	if len(qs)==0{
+		return nil, errors.New("Empty questions!")
 	}
 	return qs, nil
 }
@@ -206,11 +215,9 @@ func InitializeSession(user *User) *Session {
 		user:   user,
 		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 0,}
 
-	q, err:= session.fetchQuestionBatch(3)
+	q, err:= session.fetchQuestionBatch(1) // go one by one for more control and no remaining batch handling complexity
 	if err != nil {
 		panic(err)
-	}else if len(q)==0{
-		panic("Failed to fetch any questions!")
 	}
 	session.currentQuestion=0
 	session.questionSet.questions=q
@@ -230,46 +237,122 @@ func InitializeSession(user *User) *Session {
 	return session
 }
 
-func (session *Session) IncreaseDifficulty(reverse bool){
+func (session *Session) IncreaseDifficulty(reverse bool) error{
 	if reverse{
 		if session.currentDifficulty > 0{
 			session.currentDifficulty--
+		}else{
+			return errors.New("Minimum difficulty level!")
+
 		}
 	}else
 	{
-		if session.currentDifficulty < 2{
+		if session.currentDifficulty < 2{ // one less than max bc well increment it
 			session.currentDifficulty++
-		}
-	}
-}
+		}else{
+			return errors.New("maximum difficulty level!")
 
-func (session *Session) AdvanceTopic(reverse bool){
-	if reverse{
-		if session.currentTopicIndex > 0{
-			session.currentTopicIndex--
-		}
-	}else
-	{
-		if session.currentTopicIndex < len(session.questionSet.topics){
-			session.currentTopicIndex++
-		}
-	}
-}
-
-func (session *Session) SaveSession() error {
-	//insert submissions
-	submissionStmt, err:= session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
-		if err != nil {
-		return err
-	}
-	for _,question:=range(session.questionSet.questions){
-		_, err= submissionStmt.Exec(session.id, question.id, question.answer,question.score)
-		if err != nil {
-			return err
 		}
 	}
 	return nil
 
+}
+
+
+
+func (session *Session) AdvanceTopic(reverse bool) error{
+	if reverse{
+		if session.currentTopicIndex > 0{
+			session.currentTopicIndex--
+			session.currentDifficulty=0
+		}else{
+			return errors.New("No previous topics!")
+		}
+	}else
+	{
+		if session.currentTopicIndex < len(session.questionSet.topics)-1{
+			session.currentTopicIndex++
+			session.currentDifficulty=0
+
+		}else{
+			return errors.New("No more topics!")
+
+		}
+	}
+				return nil
+}
+
+
+func (session *Session) GetCurrentQuestion() (*Question, error){
+	if session.currentQuestion==-1{
+		return nil, errors.New("No more questions!")
+
+	}else if session.currentQuestion<len(session.questionSet.questions){
+		return &session.questionSet.questions[session.currentQuestion], nil
+	}else{
+		return nil, errors.New("BUG: Current index exceeds length of existing questions")
+	}
+
+}
+
+func (session *Session) GetCurrentTopic() string{
+	return session.questionSet.topics[session.currentTopicIndex]
+}
+
+func (session *Session) GetCurrentDifficulty() string{
+	switch session.currentDifficulty {
+		case 0: 
+			return "level 1"
+		case 1: 
+			return "level 2"
+		case 2: 
+			return "level 3"
+		default:
+			return "unknown"
+			}
+
+	}
+
+func (session *Session) AdvanceQuestion(){
+	// happy case, there are questions already
+	if session.currentQuestion < len(session.questionSet.questions)-1 {
+		session.currentQuestion++
+		return
+	} 
+	for{
+		q, err:=session.fetchQuestionBatch(1) 
+		if err==nil{
+			session.questionSet.questions = append(session.questionSet.questions, q...)
+			session.currentQuestion++
+			// successfuly fetched questions! exit
+			return
+		}
+		if session.IncreaseDifficulty(false)==nil{ // successfully increased difficulty?
+			continue // loop again and try to fetch questions
+		} 
+		if session.AdvanceTopic(false)==nil{ // successfully switched topic?
+			continue // loop again and try to fetch questions
+		}else{ // no more topics means we exhausted previous topic's difficulties
+			break
+		}
+	}
+	// if you've made it here out of the loop, no questions are left 
+	session.currentQuestion = -1
+}
+		
+
+func (session *Session) SubmitAnswer(answer string) error {
+	q,_:=session.GetCurrentQuestion()
+	q.answer=answer
+	submissionStmt, err:= session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	_, err= submissionStmt.Exec(session.id, q.id, q.answer,q.score)
+		if err != nil {
+			return err
+		}
+	return nil
 }
 
 func CloseDB(db *sql.DB){

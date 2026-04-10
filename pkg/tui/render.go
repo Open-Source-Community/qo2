@@ -84,16 +84,19 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlS:
 			if m.session.currentQuestion != -1{
-				m.session.questionSet.questions[m.session.currentQuestion].answer = m.textarea.Value()
-				if m.session.currentQuestion < len(m.session.questionSet.questions)-1 {
-					m.session.currentQuestion++
-					m.textarea.Reset()
-				} else {
-					m.session.currentQuestion = -1
-					m.session.SaveSession()
-				}
+				m.session.SubmitAnswer(m.textarea.Value())
+				m.session.AdvanceQuestion()
+				m.textarea.Reset()
 			}
-
+		// interviewer controls
+		case tea.KeyShiftLeft:
+			m.session.AdvanceTopic(true)
+		case tea.KeyShiftRight:
+			m.session.AdvanceTopic(false)
+		case tea.KeyShiftUp:
+			m.session.IncreaseDifficulty(false)
+		case tea.KeyShiftDown:
+			m.session.IncreaseDifficulty(true)
 		default:
 			if !m.textarea.Focused() {
 				cmd = m.textarea.Focus()
@@ -111,8 +114,8 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m questionModel) View() string {
-
-	if m.session.currentQuestion == -1 {
+	q, err:=m.session.GetCurrentQuestion()
+	if err!= nil {
 		help := "• ctrl+c: quit"
 		return containerStyle.Render(
 			lipgloss.JoinVertical(lipgloss.Top,
@@ -125,11 +128,13 @@ func (m questionModel) View() string {
 	} else {
 		prompt := subtleStyle.Render("Answer:")
 		help := "• ctrl+s: submit and go to next question\n• ctrl+c: quit"
-		m.viewport.SetContent(questionStyle.Render(m.session.questionSet.questions[m.session.currentQuestion].text))
+		m.viewport.SetContent(questionStyle.Render(q.text))
 		return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Top,
 			boldStyle.Render(m.session.questionSet.title),
 			"\n",
-			subtleStyle.Render(fmt.Sprintf("Question %d", m.session.currentQuestion+1)),
+			subtleStyle.Render(fmt.Sprintf("Topic: %s | Difficulty: %s", m.session.GetCurrentTopic(),m.session.GetCurrentDifficulty())),
+			subtleStyle.Render(fmt.Sprintf("Question #: %d", m.session.currentQuestion+1)),
+			"\n",
 			m.viewport.View(),
 			"\n",
 			subtleStyle.Render(prompt),
