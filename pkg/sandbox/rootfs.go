@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 //go:embed rootfs.tar.gz
@@ -180,6 +182,9 @@ func ExtractRootfs() error {
 func StartSandBox() error {
 	syscall.Sethostname([]byte("sandbox"))
 
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("mount private failed: %w", err)
+	}
 	if err := syscall.Chroot(Rootfs); err != nil {
 		return fmt.Errorf("chroot error: %w", err)
 	}
@@ -193,11 +198,8 @@ func StartSandBox() error {
 
 	// safe /dev/null
 	os.MkdirAll("/dev", 0755)
-	if !pathExists("/dev/null") {
-		f, _ := os.Create("/dev/null")
-		f.Close()
-	}
 
+	unix.Mknod("/dev/null", unix.S_IFCHR|0666, int(unix.Mkdev(1, 3)))
 	if err := dropToUser(defaultUser); err != nil {
 		return err
 	}
@@ -211,6 +213,7 @@ func StartSandBox() error {
 }
 
 func runSessionLoop() error {
+	defer syscall.Unmount("/proc", 0)
 	reader := bufio.NewReader(os.Stdin)
 	cwd := "/tmp"
 
