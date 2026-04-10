@@ -171,6 +171,7 @@ func ExtractRootfs() error {
 	}
 
 	os.MkdirAll(filepath.Join(Rootfs, "tmp"), 0777)
+	os.Chmod(filepath.Join(Rootfs, "tmp"), 01777)
 	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0755)
 	os.MkdirAll(filepath.Join(Rootfs, "bin"), 0755)
 
@@ -303,6 +304,9 @@ func dropToUser(username string) error {
 		return fmt.Errorf("user %s not found in chroot /etc/passwd", username)
 	}
 
+	if err := syscall.Setgroups([]int{gid}); err != nil {
+		return fmt.Errorf("setgroups failed: %w", err)
+	}
 	if err := syscall.Setgid(gid); err != nil {
 		return fmt.Errorf("setgid failed: %w", err)
 	}
