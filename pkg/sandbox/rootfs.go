@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 
+	"sync"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -29,13 +31,14 @@ var (
 	defaultUser = "ahmed"
 )
 
-// ─── Sandbox session ─────────────────────────────────────────────
+// Sandbox session
 
 type SandboxSession struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 	done   chan struct{}
+	mu     sync.Mutex
 }
 
 func NewSession() (*SandboxSession, error) {
@@ -78,6 +81,8 @@ func NewSession() (*SandboxSession, error) {
 }
 
 func (s *SandboxSession) Run(command string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	select {
 	case <-s.done:
 		return "", fmt.Errorf("sandbox closed")
@@ -86,6 +91,10 @@ func (s *SandboxSession) Run(command string) (string, error) {
 
 	if _, err := fmt.Fprintln(s.stdin, command); err != nil {
 		return "", fmt.Errorf("writing command: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(s.stdin, sentinel); err != nil {
+		return "", fmt.Errorf("writing sentinel: %w", err)
 	}
 
 	var sb strings.Builder
@@ -219,18 +228,32 @@ func runSessionLoop() error {
 	cwd := "/tmp"
 
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return err
-		}
-		cmdStr := strings.TrimSpace(line)
+		var lines []string
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return err
+			}
 
+			line = strings.TrimRight(line, "\n")
+
+			if line == sentinel {
+				break
+			}
+
+			lines = append(lines, line)
+		}
+		cmdStr := strings.TrimSpace(strings.Join(lines, "\n"))
+		if cmdStr == "" {
+			fmt.Println(sentinel)
+			continue
+		}
 		if cmdStr == "exit" {
 			break
 		}
 
 		// persistent cd handling
-		if strings.HasPrefix(cmdStr, "cd ") {
+		if strings.HasPrefix(cmdStr, "cd ") && !strings.Contains(cmdStr, "\n") {
 			path := strings.TrimSpace(strings.TrimPrefix(cmdStr, "cd "))
 			var newCwd string
 			if filepath.IsAbs(path) {
