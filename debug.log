@@ -1,0 +1,32 @@
+DBG: 2026/02/20 15:48:56 Registration: name=zyad, level=3, id=123, email=zyad@lol.com
+DBG: 2026/02/20 16:01:18 Registration: name=zyad, level=3, id=123, email=zyad@lol.com
+DBG: 2026/02/20 16:01:24 Question 1: "What command would you use to rename a directory called \\cd_backup to \\cd?" -> "no thank you"
+DBG: 2026/02/20 16:01:58 Question 2: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions." -> "just trying out long answer format\n\nlike so"
+DBG: 2026/02/20 16:02:01 Question 3: "How can we use the find command to rename all files larger than 5Mb to all caps?" -> "idk"
+DBG: 2026/02/20 16:02:01 All questions completed.
+DBG: 2026/02/20 16:02:31 Registration: name=salah, level=3, id=124, email=salah@lol.com
+DBG: 2026/02/20 16:02:47 Question 1: "What command would you use to rename a directory called \\cd_backup to \\cd?" -> "zyad doesn't know"
+DBG: 2026/02/20 16:02:57 Question 2: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions." -> "1\n2\n\n3"
+DBG: 2026/02/20 16:03:34 Question 3: "How can we use the find command to rename all files larger than 5Mb to all caps?" -> "should answers be logged with question id?"
+DBG: 2026/02/20 16:03:34 All questions completed.
+DBG: 2026/02/22 21:32:32 Registration: name=zyad, level=3, id=123, email=zyad@lol.com
+DBG: 2026/02/22 21:32:40 Question 1: "What command would you use to rename a directory called \\cd_backup to \\cd?" -> "hello world"
+DBG: 2026/02/22 21:32:48 Question 2: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions." -> "bla  \nbla"
+DBG: 2026/02/22 21:33:03 state restored: question 2
+DBG: 2026/02/22 21:33:31 Question 3: "How can we use the find command to rename all files larger than 5Mb to all caps?" -> "bye world"
+DBG: 2026/02/22 21:33:31 All questions completed.
+DBG: 2026/02/22 22:28:18 state restored: question -1
+DBG: 2026/02/22 22:28:24 state restored: question -1
+DBG: 2026/02/23 15:20:45 Registration: name=zyadSalah, level=3rd, id=1234, email=zyad@yahoo.com
+DBG: 2026/02/23 15:21:01 Question 1: "What command would you use to rename a directory called \\cd_backup to \\cd?" -> "hello world"
+DBG: 2026/02/23 15:21:16 Question 2: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions." -> "bla \nbla\n\n bla"
+DBG: 2026/02/23 15:21:42 state restored: question 2
+DBG: 2026/02/23 15:21:53 Question 3: "How can we use the find command to rename all files larger than 5Mb to all caps?" -> "bye world"
+DBG: 2026/02/23 15:21:53 All questions completed.
+DBG: 2026/02/23 15:22:03 state restored: question -1
+DBG: 2026/02/23 15:43:59 Registration: name=7alabessa, level=3, id=4321, email=7alabi@lol.com
+DBG: 2026/02/23 15:44:22 Question 1: "What command would you use to rename a directory called \\cd_backup to \\cd?" -> "hello world"
+DBG: 2026/02/23 15:44:30 Question 2: "Write a shell script that takes a directory path as an argument, and renames all images in the directory to the format \"img_yymmdd\". The script must include: \n 1- A shebang\n 2- A command line argument parser \n 3- 3 functions." -> "one\ntwo\nthree\n"
+DBG: 2026/02/23 15:44:45 state restored: question 2
+DBG: 2026/02/23 15:44:51 Question 3: "How can we use the find command to rename all files larger than 5Mb to all caps?" -> "bye world"
+DBG: 2026/02/23 15:44:51 All questions completed.

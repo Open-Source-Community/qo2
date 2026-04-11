@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	_ "embed"
@@ -14,36 +15,133 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ahmedYasserM/qo/pkg/logger"
+	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 //go:embed rootfs.tar.gz
 var embeddedRootfs []byte
 
 const target = "/tmp"
+const sentinel = "\x00__QO_EOF__\x00"
 
 var (
-	Rootfs      string = filepath.Join(target, "rootfs")
-	defaultUser string = "ahmed"
+	Rootfs      = filepath.Join(target, "rootfs")
+	defaultUser = "ahmed"
 )
 
-// PathExists checks if a file or directory exists.
-func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return !os.IsNotExist(err)
+// Sandbox session
+
+type SandboxSession struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+	done   chan struct{}
+	mu     sync.Mutex
 }
 
-// ExtractRootfs extracts the tar-archived rootfs folder in /tmp
-func ExtractRootfs() error {
-	if pathExists(Rootfs) {
-		_ = syscall.Unmount(filepath.Join(Rootfs, "proc"), syscall.MNT_FORCE) // force unmount of /proc to handle possible previous exits using external kill signal
-
-		if err := os.RemoveAll(Rootfs); err != nil {
-			return err
-		}
+func NewSession() (*SandboxSession, error) {
+	if err := ExtractRootfs(); err != nil {
+		return nil, fmt.Errorf("extracting rootfs: %w", err)
 	}
 
-	gzReader, err := gzip.NewReader(io.NopCloser(bytes.NewReader(embeddedRootfs)))
+	cmd := exec.Command("/proc/self/exe", "init")
+	cmd.Env = append(os.Environ(), "SANDBOX_MODE=session")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+	}
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting sandbox: %w", err)
+	}
+
+	// monitor crash
+	go func() {
+		err := cmd.Wait()
+		fmt.Fprintf(os.Stderr, "\n[SANDBOX EXITED]: %v\n", err)
+	}()
+
+	return &SandboxSession{
+		cmd:    cmd,
+		stdin:  stdinPipe,
+		stdout: bufio.NewReader(stdoutPipe),
+		done:   make(chan struct{}),
+	}, nil
+}
+
+func (s *SandboxSession) Run(command string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.done:
+		return "", fmt.Errorf("sandbox closed")
+	default:
+	}
+
+	if _, err := fmt.Fprintln(s.stdin, command); err != nil {
+		return "", fmt.Errorf("writing command: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(s.stdin, sentinel); err != nil {
+		return "", fmt.Errorf("writing sentinel: %w", err)
+	}
+
+	var sb strings.Builder
+	for {
+		line, err := s.stdout.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return sb.String(), fmt.Errorf("reading output: %w", err)
+		}
+		trimmed := strings.TrimRight(line, "\n")
+		if trimmed == sentinel {
+			break
+		}
+		sb.WriteString(line)
+	}
+
+	return sb.String(), nil
+}
+
+func (s *SandboxSession) Close() error {
+	select {
+	case <-s.done:
+		return nil
+	default:
+		close(s.done)
+	}
+
+	_, _ = fmt.Fprintln(s.stdin, "exit")
+	s.stdin.Close()
+	err := s.cmd.Wait()
+
+	_ = syscall.Unmount(Rootfs+"/proc", syscall.MNT_FORCE)
+	_ = syscall.Unmount(Rootfs+"/dev/null", syscall.MNT_FORCE)
+
+	return err
+}
+
+// Rootfs extraction
+
+func ExtractRootfs() error {
+	if pathExists(Rootfs) {
+		_ = os.RemoveAll(Rootfs)
+	}
+
+	gzReader, err := gzip.NewReader(bytes.NewReader(embeddedRootfs))
 	if err != nil {
 		return err
 	}
@@ -52,54 +150,167 @@ func ExtractRootfs() error {
 	tarReader := tar.NewReader(gzReader)
 
 	for {
-		header, err := tarReader.Next()
+		hdr, err := tarReader.Next()
 		if err == io.EOF {
-			break // done
+			break
 		}
 		if err != nil {
 			return err
 		}
 
-		destPath := filepath.Join(target, header.Name)
+		name := strings.TrimPrefix(hdr.Name, "rootfs/")
+		dest := filepath.Join(Rootfs, name)
+		cleanPath := filepath.Clean(dest)
+		if !strings.HasPrefix(cleanPath, Rootfs) {
+			return fmt.Errorf("invalid tar path: %s", hdr.Name)
+		}
 
-		switch header.Typeflag {
+		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(destPath, 0755); err != nil {
-				return err
-			}
+			os.MkdirAll(cleanPath, 0755)
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-				return err
-			}
+			os.MkdirAll(filepath.Dir(cleanPath), 0755)
+			outFile, _ := os.OpenFile(cleanPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			io.Copy(outFile, tarReader)
+			outFile.Close()
+		case tar.TypeSymlink:
+			os.MkdirAll(filepath.Dir(cleanPath), 0755)
+			os.Symlink(hdr.Linkname, cleanPath)
+		}
+	}
 
-			outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+	os.MkdirAll(filepath.Join(Rootfs, "tmp"), 0777)
+	os.Chmod(filepath.Join(Rootfs, "tmp"), 01777)
+	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0755)
+	os.MkdirAll(filepath.Join(Rootfs, "bin"), 0755)
+
+	return nil
+}
+
+// Sandbox init
+
+func StartSandBox() error {
+	syscall.Sethostname([]byte("sandbox"))
+
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("mount private failed: %w", err)
+	}
+	if err := syscall.Chroot(Rootfs); err != nil {
+		return fmt.Errorf("chroot error: %w", err)
+	}
+	if err := os.Chdir("/tmp"); err != nil {
+		return err
+	}
+
+	// mount /proc
+	os.MkdirAll("/proc", 0755)
+	syscall.Mount("proc", "/proc", "proc", 0, "")
+
+	// safe /dev/null
+	os.MkdirAll("/dev", 0755)
+
+	unix.Mknod("/dev/null", unix.S_IFCHR|0666, int(unix.Mkdev(1, 3)))
+	if err := dropToUser(defaultUser); err != nil {
+		return err
+	}
+
+	switch os.Getenv("SANDBOX_MODE") {
+	case "session":
+		return runSessionLoop()
+	default:
+		return runInteractiveShell()
+	}
+}
+
+func runSessionLoop() error {
+	defer syscall.Unmount("/proc", 0)
+	reader := bufio.NewReader(os.Stdin)
+	cwd := "/tmp"
+
+	for {
+		var lines []string
+		for {
+			line, err := reader.ReadString('\n')
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(outFile, tarReader); err != nil {
-				outFile.Close()
-				return err
-			}
-			outFile.Close()
 
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-				return err
+			line = strings.TrimRight(line, "\n")
+
+			if line == sentinel {
+				break
 			}
 
-			if err := os.Symlink(header.Linkname, destPath); err != nil {
-				return err
-			}
+			lines = append(lines, line)
 		}
+		cmdStr := strings.TrimSpace(strings.Join(lines, "\n"))
+		if cmdStr == "" {
+			fmt.Println(sentinel)
+			continue
+		}
+		if cmdStr == "exit" {
+			break
+		}
+
+		// persistent cd handling
+		if strings.HasPrefix(cmdStr, "cd ") && !strings.Contains(cmdStr, "\n") {
+			path := strings.TrimSpace(strings.TrimPrefix(cmdStr, "cd "))
+			var newCwd string
+			if filepath.IsAbs(path) {
+				newCwd = path
+			} else {
+				newCwd = filepath.Join(cwd, path)
+			}
+			if fi, err := os.Stat(newCwd); err != nil || !fi.IsDir() {
+				fmt.Printf("cd: no such directory: %s\n", path)
+			} else {
+				cwd = newCwd
+			}
+			fmt.Println(sentinel)
+			continue
+		}
+
+		if cmdStr == "" {
+			fmt.Println(sentinel)
+			continue
+		}
+
+		cmd := exec.Command("/bin/sh", "-c", cmdStr)
+		cmd.Dir = cwd
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+
+		cmd.Run()
+		fmt.Print(out.String())
+		fmt.Println(sentinel)
 	}
 	return nil
 }
 
+func runInteractiveShell() error {
+	cmd := exec.Command("/bin/bash")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// helpers
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
+}
+
 func dropToUser(username string) error {
-	passwdBytes, err := os.ReadFile("/etc/passwd")
+	passwdPath := "/etc/passwd"
+	//passwdPath := filepath.Join(Rootfs, "etc/passwd")
+	passwdBytes, err := os.ReadFile(passwdPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot read chroot /etc/passwd: %w", err)
 	}
+
 	var uid, gid int
 	var homeDir string
 	for _, line := range strings.Split(string(passwdBytes), "\n") {
@@ -111,69 +322,23 @@ func dropToUser(username string) error {
 			break
 		}
 	}
+
 	if uid == 0 && username != "root" {
 		return fmt.Errorf("user %s not found in chroot /etc/passwd", username)
 	}
+
+	if err := syscall.Setgroups([]int{gid}); err != nil {
+		return fmt.Errorf("setgroups failed: %w", err)
+	}
 	if err := syscall.Setgid(gid); err != nil {
-		return err
+		return fmt.Errorf("setgid failed: %w", err)
 	}
 	if err := syscall.Setuid(uid); err != nil {
-		return err
+		return fmt.Errorf("setuid failed: %w", err)
 	}
 
-	// Set environment variables
 	os.Setenv("HOME", homeDir)
 	os.Setenv("USER", username)
 	os.Setenv("LOGNAME", username)
-
 	return nil
-}
-
-func StartSandBox() error {
-
-	if len(os.Args) == 1 && os.Args[0] == "init" {
-		if err := syscall.Chroot(Rootfs); err != nil {
-			return err
-		}
-
-		if err := os.Chdir("/tmp"); err != nil {
-			return err
-		}
-
-		if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
-			return err
-		}
-
-		if err := dropToUser(defaultUser); err != nil {
-			return err
-		}
-
-		logger.Info("You are now inside the isolated enviornemnt.")
-
-		cmd := exec.Command("/bin/bash")
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		err := cmd.Run()
-
-		return err
-	}
-
-	cmd := exec.Command("/proc/self/exe")
-	cmd.Args = []string{"init"}
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
-	}
-
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-
-	err := syscall.Unmount(Rootfs+"/proc", 0)
-
-	return err
 }
