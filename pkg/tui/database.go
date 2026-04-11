@@ -23,7 +23,7 @@ type Session struct {
 	user    *User
 	time       string
 	notes      string
-	score      string
+	score      int
 	result     string
 	questionSet  *QuestionSet
 	currentQuestion int
@@ -105,7 +105,7 @@ func saveUserInfo(user *User, db *sql.DB) error {
 // the new topic/difficulty? Do you want to add  them to submissions even if they were
 // discarded before they were displayed?
 // I leave this chore to you, kind successor :D
-func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
+func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error){
 	stmt, err := session.db.Prepare(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
 							FROM questions q
 							WHERE difficulty = ?
@@ -128,7 +128,7 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
 	}
 	defer rows.Close()
 	var (
-		qs                                                             []Question
+		qs                                                             []*Question
 		q                                                              Question
 		_model_answer, _test_script, _setup_script, _cleanup_script, _source sql.NullString
 	)
@@ -159,7 +159,7 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]Question, error){
 		if _source.Valid {
 			q.source = _source.String
 		}
-		qs = append(qs, q)
+		qs = append(qs, &q)
 	}
 	if len(qs)==0{
 		return nil, errors.New("Empty questions!")
@@ -288,7 +288,7 @@ func (session *Session) GetCurrentQuestion() (*Question, error){
 		return nil, errors.New("No more questions!")
 
 	}else if session.currentQuestion<len(session.questionSet.questions){
-		return &session.questionSet.questions[session.currentQuestion], nil
+		return session.questionSet.questions[session.currentQuestion], nil
 	}else{
 		return nil, errors.New("BUG: Current index exceeds length of existing questions")
 	}
@@ -338,12 +338,35 @@ func (session *Session) AdvanceQuestion(){
 	}
 	// if you've made it here out of the loop, no questions are left 
 	session.currentQuestion = -1
+	session.Finalize()
 }
 		
+
+func (session *Session) Finalize() error {
+	defer CloseDB(session.db)
+	totalScore:=0
+	for _, q:= range(session.questionSet.questions){
+		totalScore+=q.score
+	}
+	session.score=totalScore
+	session.result=fmt.Sprintf("%d/%d", session.score, len(session.questionSet.questions))
+    stmt, err:= session.db.Prepare(`UPDATE sessions 
+									SET score = ?, result = ?
+									WHERE session_id = ?;`)
+    if err != nil {
+            return err
+	}
+	_, err=stmt.Exec(session.score,session.result, session.id)
+	    if err != nil {
+            return err
+	}
+	return nil
+}
 
 func (session *Session) SubmitAnswer(answer string) error {
 	q,_:=session.GetCurrentQuestion()
 	q.answer=answer
+	q.Test() // discarding returned note with error message
 	submissionStmt, err:= session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
 	if err != nil {
 		return err

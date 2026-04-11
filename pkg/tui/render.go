@@ -38,7 +38,7 @@ type QuestionSet struct {
 	title        string
 	instructions string
 	topics []string
-	questions    []Question
+	questions    []*Question
 
 }
 
