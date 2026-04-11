@@ -39,6 +39,8 @@ type Question struct {
 	topic        string
 	difficulty   int
 	model_answer string
+	oneShot      bool
+	attempted    bool
 
 	// accompanying scripts
 	test_script    string
@@ -145,7 +147,7 @@ func saveUserInfo(user *User, db *sql.DB) error {
 }
 
 func generateQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
-	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
+	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source, oneShot
 							FROM (
 								SELECT *, ROW_NUMBER() OVER(PARTITION BY topic, difficulty ORDER BY RANDOM()) as rn
 								FROM questions
@@ -161,6 +163,7 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 		qs                                                                   []Question
 		q                                                                    Question
 		_model_answer, _test_script, _setup_script, _cleanup_script, _source sql.NullString
+		_oneShot                                                             sql.NullInt64
 	)
 	for rows.Next() {
 		err = rows.Scan(
@@ -173,6 +176,7 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 			&_setup_script,
 			&_cleanup_script,
 			&_source,
+			&_oneShot,
 		)
 		if err != nil {
 			return nil, err
@@ -191,6 +195,9 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 		}
 		if _source.Valid {
 			q.source = _source.String
+		}
+		if _oneShot.Valid {
+			q.oneShot = _oneShot.Int64 == 1
 		}
 		qs = append(qs, q)
 	}
