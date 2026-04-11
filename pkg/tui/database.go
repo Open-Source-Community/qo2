@@ -6,9 +6,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/ahmedYasserM/qo/pkg/sandbox"
+	_ "modernc.org/sqlite"
 )
 
 type User struct {
@@ -30,6 +29,7 @@ type Session struct {
 	questionsSet *QuestionSet
 	db           *sql.DB
 	sandbox      *sandbox.SandboxSession // one persistent sandbox for the whole session
+
 }
 
 type Question struct {
@@ -53,6 +53,7 @@ type Question struct {
 	score         int
 	result        string
 	sandboxOutput string // stdout captured from sandbox execution
+
 }
 
 func (q Question) String() string {
@@ -122,6 +123,7 @@ func (q *Question) gradeWithSandbox(s *sandbox.SandboxSession) error {
 }
 
 func initDB(dsnURI string) (*sql.DB, error) {
+
 	db, err := sql.Open("sqlite", dsnURI)
 	if err != nil {
 		return nil, err
@@ -131,8 +133,14 @@ func initDB(dsnURI string) (*sql.DB, error) {
 	}
 	return db, nil
 }
-
 func saveUserInfo(user *User, db *sql.DB) error {
+	// check if student id exists on system
+	// this would be good to do within the form
+	// var id int
+	// if row := db.QueryRow("SELECT * FROM users WHERE user_id =?").Scan(&id); row != sql.ErrNoRows {
+	// 	// autofill the data in the text box or something
+	// and if edited delete and reinsert, could use on duplicate key but dont want this automation
+	// }
 	stmt, err := db.Prepare("INSERT INTO users(name, email, phone, year, oscian) values(?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
@@ -147,6 +155,8 @@ func saveUserInfo(user *User, db *sql.DB) error {
 }
 
 func generateQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
+	// for each topic and difficulty, select one question
+	// thus, 3 questions for each topic: easy (1), medium (2) and hard (3)
 	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source, oneShot
 							FROM (
 								SELECT *, ROW_NUMBER() OVER(PARTITION BY topic, difficulty ORDER BY RANDOM()) as rn
