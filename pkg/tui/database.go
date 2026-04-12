@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/ahmedYasserM/qo/pkg/sandbox"
 	_ "modernc.org/sqlite"
 )
 
@@ -19,26 +21,30 @@ type User struct {
 }
 
 type Session struct {
-	id int64
-	user    *User
-	time       string
-	notes      string
-	score      int
-	result     string
-	questionSet  *QuestionSet
-	currentQuestion int
+	id                int64
+	user              *User
+	time              string
+	notes             string
+	score             int
+	result            string
+	questionSet       *QuestionSet
+	currentQuestion   int
 	currentTopicIndex int
 	currentDifficulty int
-	db				*sql.DB
+	db                *sql.DB
+	sandbox           *sandbox.SandboxSession // one persistent sandbox for the whole session
+
 }
 
 type Question struct {
 	// basic data
-	id int
-	text           string
-	topic          string
-	difficulty     int // starting from zero, this makes the default field initialization (0) work fine
-	model_answer         string
+	id           int64
+	text         string
+	topic        string
+	difficulty   int
+	model_answer string
+	oneShot      bool
+	attempted    bool
 
 	// accompanying scripts
 	test_script    string
@@ -47,8 +53,11 @@ type Question struct {
 	source         string
 
 	// non-database fields: response
-	answer string
-	score int
+	answer        string
+	score         int
+	result        string
+	sandboxOutput string // stdout captured from sandbox execution
+
 }
 
 func (q Question) String() string {
@@ -63,18 +72,71 @@ func (q Question) String() string {
 	)
 }
 
+// gradeWithModelAnswer is the fallback grader when no test_script is present.
+func (q *Question) gradeWithModelAnswer() {
+	userAns := strings.TrimSpace(q.answer)
+	modelAns := strings.TrimSpace(q.model_answer)
+	if strings.EqualFold(userAns, modelAns) {
+		q.score = 1
+	} else {
+		q.score = 0
+	}
+}
+
+// attempt to run script in sandbox - usefull for debugging (read error)
+func (q *Question) gradeWithSandbox(s *sandbox.SandboxSession) error {
+	if s == nil || q.test_script == "" {
+		q.gradeWithModelAnswer()
+		return nil
+	}
+
+	// run setup script if present
+	if q.setup_script != "" {
+		if _, err := s.Run(q.setup_script); err != nil {
+			return fmt.Errorf("setup_script failed: %w", err)
+		}
+	}
+
+	// write the candidate's answer as a shell command, then run the test
+	if q.answer != "" {
+		if _, err := s.Run(q.answer); err != nil {
+			// answer failed to execute — still run the test to get a score
+		}
+	}
+
+	output, err := s.Run(q.test_script)
+	if err != nil {
+		return fmt.Errorf("test_script failed: %w", err)
+	}
+	q.sandboxOutput = output
+
+	if strings.Contains(output, "PASS") {
+		q.score = 1
+		q.result = "pass"
+	} else {
+		q.score = 0
+		q.result = "fail"
+	}
+
+	// run cleanup script regardless of result
+	if q.cleanup_script != "" {
+		_, _ = s.Run(q.cleanup_script)
+	}
+
+	return nil
+}
+
 func initDB(dsnURI string) (*sql.DB, error) {
-	var err error
+
 	db, err := sql.Open("sqlite", dsnURI)
 	if err != nil {
 		return nil, err
 	}
 	if err := db.Ping(); err != nil {
-    	return nil, err
-    }
-	return db, err
+		return nil, err
+	}
+	return db, nil
 }
-
 func saveUserInfo(user *User, db *sql.DB) error {
 	// check if student id exists on system
 	// this would be good to do within the form
@@ -93,20 +155,17 @@ func saveUserInfo(user *User, db *sql.DB) error {
 		return err
 	}
 	user.user_id, err = result.LastInsertId()
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // Fetches a question batch of the given size depending on the session's current difficulty and topic.
 // NOTE: this is currently used with batchSize=1. If this is eventually changed, make sure to handle
-// the remaining questions in the batch. Do you want to immediately discard them and switch to 
+// the remaining questions in the batch. Do you want to immediately discard them and switch to
 // the new topic/difficulty? Do you want to add  them to submissions even if they were
 // discarded before they were displayed?
 // I leave this chore to you, kind successor :D
-func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error){
-	stmt, err := session.db.Prepare(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source
+func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error) {
+	stmt, err := session.db.Prepare(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source, oneShot
 							FROM questions q
 							WHERE difficulty = ?
 							AND topic = ?
@@ -120,7 +179,7 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error){
 	if err != nil {
 		return nil, err
 	}
-	currentTopic:=session.GetCurrentTopic()
+	currentTopic := session.GetCurrentTopic()
 
 	rows, err := stmt.Query(session.currentDifficulty, currentTopic, session.id, batchSize)
 	if err != nil {
@@ -128,11 +187,12 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error){
 	}
 	defer rows.Close()
 	var (
-		qs                                                             []*Question
-		q                                                              Question
+		qs                                                                   []*Question
 		_model_answer, _test_script, _setup_script, _cleanup_script, _source sql.NullString
+		_oneShot                                                             sql.NullInt64
 	)
 	for rows.Next() {
+		q := Question{}
 		err = rows.Scan(
 			&q.id,
 			&q.text,
@@ -143,6 +203,7 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error){
 			&_setup_script,
 			&_cleanup_script,
 			&_source,
+			&_oneShot,
 		)
 		if _model_answer.Valid {
 			q.model_answer = _model_answer.String
@@ -161,19 +222,21 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error){
 		}
 		qs = append(qs, &q)
 	}
-	if len(qs)==0{
-		return nil, errors.New("Empty questions!")
+	if err != nil {
+		return nil, err
+	}
+	if len(qs) == 0 {
+		return nil, errors.New("empty questions")
 	}
 	return qs, nil
 }
-
-
 
 func initializeQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
 	//fetch topics
 	var (
 		topics []string
-		topic sql.NullString)
+		topic  sql.NullString
+	)
 
 	rows, err := db.Query(`SELECT DISTINCT topic FROM questions`)
 	if err != nil {
@@ -185,199 +248,215 @@ func initializeQuestionSet(title string, instructions string, db *sql.DB) (*Ques
 			return nil, err
 		}
 		if topic.Valid {
-            topics = append(topics, topic.String)
-        }
+			topics = append(topics, topic.String)
+		}
 
 	}
 	if err = rows.Err(); err != nil {
-        return nil, err
-    }
+		return nil, err
+	}
 
 	return &QuestionSet{title: title, instructions: instructions, topics: topics}, nil
 
 }
 
-
-
-func InitializeSession(user *User) *Session {
+func InitializeSession(user *User) (*Session, error) {
 	db, err := initDB("linux.db")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to db:%s", err))
 	}
-	saveUserInfo(user,db)
-
+	if err := saveUserInfo(user, db); err != nil {
+		return nil, fmt.Errorf("saving user: %w", err)
+	}
 	qs, err := initializeQuestionSet("Interview", "", db)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to initialize question set: %s", err))
+		db.Close()
+		return nil, fmt.Errorf("generating question set: %w", err)
 	}
 
 	session := &Session{time: time.Now().Local().Format(time.RFC3339),
-		user:   user,
-		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 0,}
+		user:        user,
+		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 0}
 
-	q, err:= session.fetchQuestionBatch(1) // go one by one for more control and no remaining batch handling complexity
+	q, err := session.fetchQuestionBatch(1) // go one by one for more control and no remaining batch handling complexity
 	if err != nil {
-		panic(err)
+		db.Close()
+		return nil, fmt.Errorf("generating question set: %w", err)
 	}
-	session.currentQuestion=0
-	session.questionSet.questions=q
-		//insert session metadata
-	sessionStmt, err:= db.Prepare("INSERT INTO sessions(user_id, time, notes, score, result) values(?, ?, ?, ?, ?)")
+	session.currentQuestion = 0
+	session.questionSet.questions = q
+	//insert session metadata
+	sessionStmt, err := db.Prepare("INSERT INTO sessions(user_id, time, notes, score, result) values(?, ?, ?, ?, ?)")
 	if err != nil {
 		panic("Failed to initialize session")
 	}
-	result, err:= sessionStmt.Exec(session.user.user_id, session.time, session.notes, session.score, session.result)
-		if err != nil {
-			panic("Failed to initialize session")
+	result, err := sessionStmt.Exec(session.user.user_id, session.time, session.notes, session.score, session.result)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to initialize session: %w", err)
 
 	}
-	session_id, _:= result.LastInsertId()
+	session_id, _ := result.LastInsertId()
+	session.id = session_id
 
-	session.id=session_id
-	return session
+	sbSession, err := sandbox.NewSession()
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("starting sandbox: %w", err)
+	}
+	session.sandbox = sbSession
+
+	return session, nil
 }
 
-func (session *Session) IncreaseDifficulty(reverse bool) error{
-	if reverse{
-		if session.currentDifficulty > 0{
+func (session *Session) IncreaseDifficulty(reverse bool) error {
+	if reverse {
+		if session.currentDifficulty > 0 {
 			session.currentDifficulty--
-		}else{
+		} else {
 			return errors.New("Minimum difficulty level!")
 
 		}
-	}else
-	{
-		if session.currentDifficulty < 2{ // one less than max bc well increment it
+	} else {
+		if session.currentDifficulty < 2 { // one less than max bc well increment it
 			session.currentDifficulty++
-		}else{
+		} else {
 			return errors.New("maximum difficulty level!")
 
 		}
 	}
-	return nil
 
+	session.result = fmt.Sprintf("%d/%d", session.score, len(session.questionSet.questions))
+
+	updateStmt, err := session.db.Prepare(`UPDATE sessions SET score = ?, result = ? WHERE session_id = ?;`)
+	if err != nil {
+		return err
+	}
+	defer updateStmt.Close()
+
+	_, err = updateStmt.Exec(session.score, session.result, session.id)
+	return err
 }
 
-
-
-func (session *Session) AdvanceTopic(reverse bool) error{
-	if reverse{
-		if session.currentTopicIndex > 0{
+func (session *Session) AdvanceTopic(reverse bool) error {
+	if reverse {
+		if session.currentTopicIndex > 0 {
 			session.currentTopicIndex--
-			session.currentDifficulty=0
-		}else{
+			session.currentDifficulty = 0
+		} else {
 			return errors.New("No previous topics!")
 		}
-	}else
-	{
-		if session.currentTopicIndex < len(session.questionSet.topics)-1{
+	} else {
+		if session.currentTopicIndex < len(session.questionSet.topics)-1 {
 			session.currentTopicIndex++
-			session.currentDifficulty=0
+			session.currentDifficulty = 0
 
-		}else{
+		} else {
 			return errors.New("No more topics!")
 
 		}
 	}
-				return nil
+	return nil
 }
 
-
-func (session *Session) GetCurrentQuestion() (*Question, error){
-	if session.currentQuestion==-1{
+func (session *Session) GetCurrentQuestion() (*Question, error) {
+	if session.currentQuestion == -1 {
 		return nil, errors.New("No more questions!")
 
-	}else if session.currentQuestion<len(session.questionSet.questions){
+	} else if session.currentQuestion < len(session.questionSet.questions) {
 		return session.questionSet.questions[session.currentQuestion], nil
-	}else{
+	} else {
 		return nil, errors.New("BUG: Current index exceeds length of existing questions")
 	}
 
 }
 
-func (session *Session) GetCurrentTopic() string{
+func (session *Session) GetCurrentTopic() string {
 	return session.questionSet.topics[session.currentTopicIndex]
 }
 
-func (session *Session) GetCurrentDifficulty() string{
+func (session *Session) GetCurrentDifficulty() string {
 	switch session.currentDifficulty {
-		case 0: 
-			return "level 1"
-		case 1: 
-			return "level 2"
-		case 2: 
-			return "level 3"
-		default:
-			return "unknown"
-			}
-
+	case 0:
+		return "level 1"
+	case 1:
+		return "level 2"
+	case 2:
+		return "level 3"
+	default:
+		return "unknown"
 	}
 
-func (session *Session) AdvanceQuestion(){
+}
+
+func (session *Session) AdvanceQuestion() {
 	// happy case, there are questions already
 	if session.currentQuestion < len(session.questionSet.questions)-1 {
 		session.currentQuestion++
 		return
-	} 
-	for{
-		q, err:=session.fetchQuestionBatch(1) 
-		if err==nil{
+	}
+	for {
+		q, err := session.fetchQuestionBatch(1)
+		if err == nil {
 			session.questionSet.questions = append(session.questionSet.questions, q...)
 			session.currentQuestion++
 			// successfuly fetched questions! exit
 			return
 		}
-		if session.IncreaseDifficulty(false)==nil{ // successfully increased difficulty?
+		if session.IncreaseDifficulty(false) == nil { // successfully increased difficulty?
 			continue // loop again and try to fetch questions
-		} 
-		if session.AdvanceTopic(false)==nil{ // successfully switched topic?
+		}
+		if session.AdvanceTopic(false) == nil { // successfully switched topic?
 			continue // loop again and try to fetch questions
-		}else{ // no more topics means we exhausted previous topic's difficulties
+		} else { // no more topics means we exhausted previous topic's difficulties
 			break
 		}
 	}
-	// if you've made it here out of the loop, no questions are left 
+	// if you've made it here out of the loop, no questions are left
 	session.currentQuestion = -1
 	session.Finalize()
 }
-		
 
 func (session *Session) Finalize() error {
-	defer CloseDB(session.db)
-	totalScore:=0
-	for _, q:= range(session.questionSet.questions){
-		totalScore+=q.score
+
+	// close sandbox first — done executing commands
+	if session.sandbox != nil {
+		_ = session.sandbox.Close()
+		session.sandbox = nil
 	}
-	session.score=totalScore
-	session.result=fmt.Sprintf("%d/%d", session.score, len(session.questionSet.questions))
-    stmt, err:= session.db.Prepare(`UPDATE sessions 
+	defer CloseDB(session.db)
+	totalScore := 0
+	for _, q := range session.questionSet.questions {
+		totalScore += q.score
+	}
+	session.score = totalScore
+	session.result = fmt.Sprintf("%d/%d", session.score, len(session.questionSet.questions))
+	stmt, err := session.db.Prepare(`UPDATE sessions 
 									SET score = ?, result = ?
 									WHERE session_id = ?;`)
-    if err != nil {
-            return err
+	if err != nil {
+		return err
 	}
-	_, err=stmt.Exec(session.score,session.result, session.id)
-	    if err != nil {
-            return err
+	_, err = stmt.Exec(session.score, session.result, session.id)
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
 func (session *Session) SubmitAnswer(answer string) error {
-	q,_:=session.GetCurrentQuestion()
-	q.answer=answer
-	q.Test() // discarding returned note with error message
-	submissionStmt, err:= session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
+	q, _ := session.GetCurrentQuestion()
+	q.answer = answer
+	submissionStmt, err := session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
-	_, err= submissionStmt.Exec(session.id, q.id, q.answer,q.score)
-		if err != nil {
-			return err
-		}
+	_, err = submissionStmt.Exec(session.id, q.id, q.answer, q.score)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-func CloseDB(db *sql.DB){
+func CloseDB(db *sql.DB) {
 	db.Close()
 }
