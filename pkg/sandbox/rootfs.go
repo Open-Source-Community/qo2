@@ -16,8 +16,6 @@ import (
 	"syscall"
 
 	"sync"
-
-	"golang.org/x/sys/unix"
 )
 
 //go:embed rootfs.tar.gz
@@ -107,7 +105,8 @@ func (s *SandboxSession) Run(command string) (string, error) {
 			return sb.String(), fmt.Errorf("reading output: %w", err)
 		}
 		trimmed := strings.TrimRight(line, "\n")
-		if trimmed == sentinel {
+		if strings.HasSuffix(trimmed, sentinel) {
+			sb.WriteString(strings.TrimSuffix(trimmed, sentinel))
 			break
 		}
 		sb.WriteString(line)
@@ -195,10 +194,17 @@ func StartSandBox() error {
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
 		return fmt.Errorf("mount private failed: %w", err)
 	}
+
+	os.MkdirAll(filepath.Join(Rootfs, "dev"), 0755)
+	os.WriteFile(filepath.Join(Rootfs, "dev/null"), nil, 0666)
+	if err := syscall.Mount("/dev/null", filepath.Join(Rootfs, "dev/null"), "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("mount /dev/null failed: %w", err)
+	}
+
 	if err := syscall.Chroot(Rootfs); err != nil {
 		return fmt.Errorf("chroot error: %w", err)
 	}
-	if err := os.Chdir("/tmp"); err != nil {
+	if err := os.Chdir("/home/ahmed"); err != nil {
 		return err
 	}
 
@@ -206,10 +212,6 @@ func StartSandBox() error {
 	os.MkdirAll("/proc", 0755)
 	syscall.Mount("proc", "/proc", "proc", 0, "")
 
-	// safe /dev/null
-	os.MkdirAll("/dev", 0755)
-
-	unix.Mknod("/dev/null", unix.S_IFCHR|0666, int(unix.Mkdev(1, 3)))
 	if err := dropToUser(defaultUser); err != nil {
 		return err
 	}
@@ -225,7 +227,7 @@ func StartSandBox() error {
 func runSessionLoop() error {
 	defer syscall.Unmount("/proc", 0)
 	reader := bufio.NewReader(os.Stdin)
-	cwd := "/tmp"
+	cwd := "/home/ahmed"
 
 	for {
 		var lines []string
@@ -277,11 +279,21 @@ func runSessionLoop() error {
 
 		cmd := exec.Command("/bin/sh", "-c", cmdStr)
 		cmd.Dir = cwd
+		cmd.Env = []string{
+			"PATH=/bin:/usr/bin",
+			"HOME=/home/ahmed",
+			"USER=ahmed",
+			"LOGNAME=ahmed",
+			"TERM=xterm",
+		}
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
 
-		cmd.Run()
+		err := cmd.Run()
+		if err != nil {
+			out.WriteString(fmt.Sprintf("sh error: %v\n", err))
+		}
 		fmt.Print(out.String())
 		fmt.Println(sentinel)
 	}
