@@ -180,7 +180,7 @@ func ExtractRootfs() error {
 
 	os.MkdirAll(filepath.Join(Rootfs, "tmp"), 0777)
 	os.Chmod(filepath.Join(Rootfs, "tmp"), 01777)
-	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0755)
+	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0777)
 	os.MkdirAll(filepath.Join(Rootfs, "bin"), 0755)
 
 	return nil
@@ -254,6 +254,15 @@ func runSessionLoop() error {
 			break
 		}
 
+		if strings.HasPrefix(cmdStr, "man ") {
+			topic := strings.TrimPrefix(cmdStr, "man ")
+			cmdStr = fmt.Sprintf(
+				"f=$(find /usr/share/man -name '%s.*' 2>/dev/null | head -1); "+
+					"[ -z \"$f\" ] && echo 'No man page for %s' && exit; "+
+					"case \"$f\" in *.gz) zcat \"$f\";; *) cat \"$f\";; esac | sed 's/.\x08//g'",
+				topic, topic,
+			)
+		}
 		// persistent cd handling
 		if strings.HasPrefix(cmdStr, "cd ") && !strings.Contains(cmdStr, "\n") {
 			path := strings.TrimSpace(strings.TrimPrefix(cmdStr, "cd "))
@@ -285,6 +294,11 @@ func runSessionLoop() error {
 			"USER=ahmed",
 			"LOGNAME=ahmed",
 			"TERM=xterm",
+			"MANPATH=/usr/share/man:/usr/local/share/man",
+			"PAGER=less",
+			"MANPAGER=less",
+			// "GROFF_NO_SGR=1",
+			// "MAN_DISABLE_SECCOMP=1",
 		}
 		var out bytes.Buffer
 		cmd.Stdout = &out
