@@ -138,7 +138,10 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastOutput = fmt.Sprintf("grading error: %v", msg.err)
 			m.lastPass = false
 		} else {
-			m.lastOutput = msg.output
+			m.lastOutput = strings.TrimSpace(msg.output)
+			if m.lastOutput == "" {
+				m.lastOutput = "(no output)"
+			}
 			m.lastPass = msg.pass
 		}
 		m.outputViewport.SetContent(m.lastOutput)
@@ -176,6 +179,18 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			q := m.session.questionSet.questions[m.session.currentQuestion]
 
+			// run start_up script for each question as soon as loaded
+			if !q.attempted && q.setup_script != "" {
+				_, err := m.session.sandbox.Run(q.setup_script)
+				//fmt.Println("setup out:", out, "err:", err)
+				if err != nil {
+					m.lastOutput = "setup failed: " + err.Error()
+					m.lastPass = false
+					m.showOutput = true
+					return m, nil
+				}
+			}
+
 			// block re-runs for oneShot
 			if q.oneShot && q.attempted {
 				m.lastOutput = "This question allows only one attempt."
@@ -206,21 +221,54 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			q, _ := m.session.GetCurrentQuestion()
+
 			if !q.attempted {
 				return m, nil
 			}
 			m.showOutput = false
+
+			// run test script to auto grade then immediately run clean_up script
+			oldQ, _ := m.session.GetCurrentQuestion()
+			if oldQ.test_script != "" {
+				status, err := m.session.sandbox.Run(oldQ.test_script)
+				if err != nil {
+					//fmt.Println(status, err)
+					oldQ.score = 0
+				} else if strings.TrimSpace(status) == "ok" {
+					//fmt.Println(status, err)
+					if oldQ.difficulty == 1 {
+						oldQ.score = 1
+					} else if oldQ.difficulty == 2 {
+						oldQ.score = 3
+					} else {
+						oldQ.score = 5
+					}
+				} else {
+					//fmt.Println(status, err)
+					oldQ.score = 0
+				}
+			}
+			if oldQ.cleanup_script != "" {
+				m.session.sandbox.Run(oldQ.cleanup_script)
+			}
 			m.session.SubmitAnswer(q.answer)
+
 			m.session.AdvanceQuestion()
+
 			m.textarea.Reset()
 			return m, nil
 		default:
 			// if output is shown and user presses anything -> go back to editing
 			if m.showOutput && !m.grading {
-				m.showOutput = false
-				cmd = m.textarea.Focus()
-				cmds = append(cmds, cmd)
-				return m, tea.Batch(cmds...)
+				switch msg.String() {
+				case "up", "down":
+					// let these slip to allow scrolling!!!
+				default:
+					m.showOutput = false
+					cmd = m.textarea.Focus()
+					cmds = append(cmds, cmd)
+					return m, tea.Batch(cmds...)
+				}
 			}
 
 			if !m.textarea.Focused() && !m.grading {
@@ -280,10 +328,11 @@ func (m questionModel) View() string {
 	parts := []string{
 		boldStyle.Render(m.session.questionSet.title),
 		"",
-		subtleStyle.Render(fmt.Sprintf("topic: %s  •  difficulty: %s",
+		subtleStyle.Render(fmt.Sprintf("topic: %s  •  difficulty: %s  •  one attempt? %t",
 
 			m.session.GetCurrentTopic(),
 			m.session.GetCurrentDifficulty(),
+			m.session.questionSet.questions[m.session.currentQuestion].oneShot,
 		)),
 		m.questionViewport.View(),
 		"",
@@ -307,17 +356,17 @@ func (m questionModel) View() string {
 			label = "Output   "
 		}
 
-		displayOutput := strings.TrimSpace(m.lastOutput)
-		if displayOutput == "" {
-			displayOutput = "(no output)"
-		}
-		m.outputViewport.SetContent(displayOutput)
+		// displayOutput := strings.TrimSpace(m.lastOutput)
+		// if displayOutput == "" {
+		// 	displayOutput = "(no output)"
+		// }
+		// m.outputViewport.SetContent(displayOutput)
 
 		parts = append(parts,
 			subtleStyle.Render(label),
 			outputBox.Render(m.outputViewport.View()),
 			"",
-			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute • ctrl+c: quit"),
+			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute"),
 		)
 	} else {
 		parts = append(parts,
@@ -326,7 +375,7 @@ func (m questionModel) View() string {
 			"",
 			//m.progress.View(),
 			"",
-			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute • ctrl+c: quit"),
+			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute"),
 		)
 	}
 
@@ -362,10 +411,12 @@ func InitialInfoModel() infoModel {
 	inputs[4] = textinput.New()
 	inputs[4].Placeholder = "Are you an OSC member? (y/n)"
 
+	p := progress.New(progress.WithGradient("#"+hexBlue, "#"+hexLightBlue))
 	return infoModel{
-		inputs:  inputs,
-		focused: 0,
-		user:    &User{},
+		inputs:   inputs,
+		focused:  0,
+		progress: p,
+		user:     &User{},
 	}
 }
 
@@ -447,7 +498,7 @@ func (m infoModel) View() string {
 		"",
 		m.progress.View(),
 		"",
-		subtleStyle.Render("enter: next field  •  ctrl+c: quit"),
+		subtleStyle.Render("enter: next field  •  ctrl+c: quit tool completely"),
 	))
 }
 

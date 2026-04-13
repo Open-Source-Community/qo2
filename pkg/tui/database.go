@@ -276,7 +276,7 @@ func InitializeSession(user *User) (*Session, error) {
 
 	session := &Session{time: time.Now().Local().Format(time.RFC3339),
 		user:        user,
-		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 0}
+		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 1}
 
 	q, err := session.fetchQuestionBatch(1) // go one by one for more control and no remaining batch handling complexity
 	if err != nil {
