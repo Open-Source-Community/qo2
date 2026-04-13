@@ -376,8 +376,8 @@ func runSessionLoop() error {
 			"MANPATH=/usr/share/man:/usr/local/share/man",
 			"PAGER=less",
 			"MANPAGER=less",
-			// "GROFF_NO_SGR=1",
-			// "MAN_DISABLE_SECCOMP=1",
+			// Ensure dynamic linker finds libs regardless of distro layout
+			"LD_LIBRARY_PATH=/usr/lib:/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu",
 		}
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -504,8 +504,9 @@ func provisionTool(name string) error {
 //   - /usr/lib/libc.so.6            (Arch/Fedora)
 //   - /lib/x86_64-linux-gnu/libc.so.6 (Ubuntu/Debian)
 //
-// Inside the sandbox, /lib and /lib64 are symlinks to usr/lib, so os
-// functions will follow them automatically, placing files in the right spot.
+// Additionally, every library is ALSO copied into rootfs/usr/lib/<basename>
+// as a universal fallback, so the dynamic linker can always find it even
+// without a valid ld.so.cache (which may be stale or missing in the sandbox).
 func provisionLib(hostPath string) error {
 	// Resolve any symlinks on the HOST to get to the real file
 	realPath, err := filepath.EvalSymlinks(hostPath)
@@ -514,8 +515,7 @@ func provisionLib(hostPath string) error {
 	}
 
 	// Copy the real file into the sandbox at its exact path.
-	// Note: os.MkdirAll and file ops follow sandbox symlinks (e.g. /lib -> usr/lib),
-	// so Ubuntu's /lib/x86_64-linux-gnu/ will correctly land under usr/lib/.
+	// os.MkdirAll/file ops follow sandbox symlinks (e.g. /lib -> usr/lib)
 	sandboxDst := filepath.Join(Rootfs, realPath)
 	if err := os.MkdirAll(filepath.Dir(sandboxDst), 0755); err != nil {
 		return err
@@ -536,6 +536,22 @@ func provisionLib(hostPath string) error {
 				target = filepath.Base(realPath)
 			}
 			_ = os.Symlink(target, sandboxLink)
+		}
+	}
+
+	// Belt-and-suspenders: ALSO copy to flat /usr/lib/<basename>.
+	// This ensures discoverability on ALL distros regardless of ld.so.cache
+	// or multiarch subdirectory layout (e.g. Ubuntu's x86_64-linux-gnu/).
+	flatDst := filepath.Join(Rootfs, "usr/lib", filepath.Base(realPath))
+	if flatDst != sandboxDst {
+		_ = copyFile(realPath, flatDst)
+	}
+	// Also symlink with original basename if different
+	origBase := filepath.Base(hostPath)
+	if origBase != filepath.Base(realPath) {
+		origFlat := filepath.Join(Rootfs, "usr/lib", origBase)
+		if _, err := os.Lstat(origFlat); os.IsNotExist(err) {
+			_ = os.Symlink(filepath.Base(realPath), origFlat)
 		}
 	}
 
