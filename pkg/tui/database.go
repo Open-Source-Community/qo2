@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,22 @@ type User struct {
 	oscian  bool
 }
 
+type SelectionMode int
+
+const (
+	ModeByTopic SelectionMode = iota
+	ModeGlobal
+	ModeByDifficulty
+)
+
+type SessionConfig struct {
+	Mode             SelectionMode
+	TopicCounts      map[string]int
+	GlobalCount      int
+	GlobalTopics     []string
+	DifficultyCounts map[int]int
+}
+
 type Session struct {
 	id                int64
 	user              *User
@@ -33,7 +50,10 @@ type Session struct {
 	currentDifficulty int
 	db                *sql.DB
 	sandbox           *sandbox.SandboxSession // one persistent sandbox for the whole session
-
+	config            SessionConfig
+	topicFetched      map[string]int
+	difficultyFetched map[int]int
+	globalFetched    int
 }
 
 type Question struct {
@@ -137,6 +157,55 @@ func initDB(dsnURI string) (*sql.DB, error) {
 	}
 	return db, nil
 }
+
+func FetchTopicsWithCounts() (map[string]int, error) {
+	db, err := initDB("linux.db")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT topic, count(*) FROM questions GROUP BY topic`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var topic string
+		var count int
+		if err := rows.Scan(&topic, &count); err != nil {
+			return nil, err
+		}
+		counts[topic] = count
+	}
+	return counts, nil
+}
+
+func FetchDifficultyWithCounts() (map[int]int, error) {
+	db, err := initDB("linux.db")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT difficulty, count(*) FROM questions GROUP BY difficulty`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[int]int)
+	for rows.Next() {
+		var diff, count int
+		if err := rows.Scan(&diff, &count); err != nil {
+			return nil, err
+		}
+		counts[diff] = count
+	}
+	return counts, nil
+}
 func saveUserInfo(user *User, db *sql.DB) error {
 	// check if student id exists on system
 	// this would be good to do within the form
@@ -231,36 +300,53 @@ func (session *Session) fetchQuestionBatch(batchSize int) ([]*Question, error) {
 	return qs, nil
 }
 
-func initializeQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
-	//fetch topics
-	var (
-		topics []string
-		topic  sql.NullString
-	)
+func initializeQuestionSet(title string, instructions string, db *sql.DB, config SessionConfig) (*QuestionSet, error) {
+	var topics []string
 
-	rows, err := db.Query(`SELECT DISTINCT topic FROM questions`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		if err := rows.Scan(&topic); err != nil {
+	switch config.Mode {
+	case ModeByTopic:
+		for topic := range config.TopicCounts {
+			topics = append(topics, topic)
+		}
+	case ModeGlobal:
+		for _, topic := range config.GlobalTopics {
+			topics = append(topics, topic)
+		}
+	case ModeByDifficulty:
+		// topic doesn't matter for difficulty mode, but we need at least one to start the loop
+		rows, err := db.Query(`SELECT DISTINCT topic FROM questions`)
+		if err != nil {
 			return nil, err
 		}
-		if topic.Valid {
-			topics = append(topics, topic.String)
+		defer rows.Close()
+		for rows.Next() {
+			var t string
+			if err := rows.Scan(&t); err == nil {
+				topics = append(topics, t)
+			}
 		}
-
 	}
-	if err = rows.Err(); err != nil {
-		return nil, err
+
+	if len(topics) == 0 {
+		// fallback to random topics if none selected (backward compatibility or empty config)
+		rows, err := db.Query(`SELECT DISTINCT topic FROM questions ORDER BY RANDOM()`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var topic sql.NullString
+			if err := rows.Scan(&topic); err == nil && topic.Valid {
+				topics = append(topics, topic.String)
+			}
+		}
 	}
 
 	return &QuestionSet{title: title, instructions: instructions, topics: topics}, nil
 
 }
 
-func InitializeSession(user *User) (*Session, error) {
+func InitializeSession(user *User, config SessionConfig) (*Session, error) {
 	db, err := initDB("linux.db")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to db:%s", err))
@@ -268,23 +354,30 @@ func InitializeSession(user *User) (*Session, error) {
 	if err := saveUserInfo(user, db); err != nil {
 		return nil, fmt.Errorf("saving user: %w", err)
 	}
-	qs, err := initializeQuestionSet("Interview", "", db)
+	qs, err := initializeQuestionSet("Interview", "", db, config)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("generating question set: %w", err)
 	}
 
 	session := &Session{time: time.Now().Local().Format(time.RFC3339),
-		user:        user,
-		questionSet: qs, db: db, currentQuestion: -1, currentTopicIndex: 0, currentDifficulty: 1}
-
-	q, err := session.fetchQuestionBatch(1) // go one by one for more control and no remaining batch handling complexity
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("generating question set: %w", err)
+		user:         user,
+		questionSet:  qs,
+		db:           db,
+		currentQuestion: -1,
+		currentTopicIndex: 0,
+		currentDifficulty: 0,
+		config:       config,
+		topicFetched: make(map[string]int),
+		difficultyFetched: make(map[int]int),
 	}
-	session.currentQuestion = 0
-	session.questionSet.questions = q
+
+	session.AdvanceQuestion() // smoothly loop to find first valid topic/difficulty
+	if len(session.questionSet.questions) == 0 {
+		db.Close()
+		return nil, fmt.Errorf("generating question set: no questions found in database")
+	}
+
 	//insert session metadata
 	sessionStmt, err := db.Prepare("INSERT INTO sessions(user_id, time, notes, score, result) values(?, ?, ?, ?, ?)")
 	if err != nil {
@@ -297,6 +390,22 @@ func InitializeSession(user *User) (*Session, error) {
 	}
 	session_id, _ := result.LastInsertId()
 	session.id = session_id
+
+	// Check if any topic requires root access
+	needsRoot := false
+	for _, topic := range session.questionSet.topics {
+		// Use a more inclusive check for the user management topic
+		if topic == "User & Group Management" || topic == "Users & Groups" {
+			needsRoot = true
+			break
+		}
+	}
+
+	if needsRoot {
+		os.Setenv("SANDBOX_USER", "root")
+	} else {
+		os.Unsetenv("SANDBOX_USER")
+	}
 
 	sbSession, err := sandbox.NewSession()
 	if err != nil {
@@ -317,7 +426,7 @@ func (session *Session) IncreaseDifficulty(reverse bool) error {
 
 		}
 	} else {
-		if session.currentDifficulty < 2 { // one less than max bc well increment it
+		if session.currentDifficulty < 3 { // one less than max bc well increment it
 			session.currentDifficulty++
 		} else {
 			return errors.New("maximum difficulty level!")
@@ -376,11 +485,11 @@ func (session *Session) GetCurrentTopic() string {
 
 func (session *Session) GetCurrentDifficulty() string {
 	switch session.currentDifficulty {
-	case 0:
-		return "level 1"
 	case 1:
-		return "level 2"
+		return "level 1"
 	case 2:
+		return "level 2"
+	case 3:
 		return "level 3"
 	default:
 		return "unknown"
@@ -394,24 +503,77 @@ func (session *Session) AdvanceQuestion() {
 		session.currentQuestion++
 		return
 	}
+
 	for {
+		switch session.config.Mode {
+		case ModeByTopic:
+			currentTopic := session.GetCurrentTopic()
+			targetTopicCount := session.config.TopicCounts[currentTopic]
+			if targetTopicCount > 0 && session.topicFetched[currentTopic] >= targetTopicCount {
+				if session.AdvanceTopic(false) == nil {
+					continue
+				} else {
+					goto Done
+				}
+			}
+		case ModeGlobal:
+			if session.config.GlobalCount > 0 && session.globalFetched >= session.config.GlobalCount {
+				goto Done
+			}
+		case ModeByDifficulty:
+			// In difficulty mode, difficulty is our primary driver.
+			// AdvanceQuestion will loop through topics just to find questions of the current difficulty.
+			targetDiffCount := session.config.DifficultyCounts[session.currentDifficulty]
+			if targetDiffCount > 0 && session.difficultyFetched[session.currentDifficulty] >= targetDiffCount {
+				// difficulty met? try increasing difficulty
+				if session.currentDifficulty < 3 {
+					session.currentDifficulty++
+					continue
+				} else {
+					goto Done
+				}
+			}
+		}
+
 		q, err := session.fetchQuestionBatch(1)
 		if err == nil {
 			session.questionSet.questions = append(session.questionSet.questions, q...)
 			session.currentQuestion++
-			// successfuly fetched questions! exit
+			session.topicFetched[q[0].topic]++
+			session.difficultyFetched[q[0].difficulty]++
+			session.globalFetched++
 			return
 		}
-		if session.IncreaseDifficulty(false) == nil { // successfully increased difficulty?
-			continue // loop again and try to fetch questions
-		}
-		if session.AdvanceTopic(false) == nil { // successfully switched topic?
-			continue // loop again and try to fetch questions
-		} else { // no more topics means we exhausted previous topic's difficulties
-			break
+
+		// fetch failed? try next combo
+		if session.config.Mode == ModeByDifficulty {
+			// for difficulty mode, just try next topic for the SAME difficulty
+			if session.AdvanceTopic(false) == nil {
+				continue
+			} else {
+				// topic exhausted? try next difficulty if possible
+				if session.currentDifficulty < 3 {
+					session.currentDifficulty++
+					session.currentTopicIndex = 0
+					continue
+				} else {
+					goto Done
+				}
+			}
+		} else {
+			// standard logic
+			if session.IncreaseDifficulty(false) == nil {
+				continue
+			}
+			if session.AdvanceTopic(false) == nil {
+				continue
+			} else {
+				goto Done
+			}
 		}
 	}
-	// if you've made it here out of the loop, no questions are left
+
+Done:
 	session.currentQuestion = -1
 	session.Finalize()
 }

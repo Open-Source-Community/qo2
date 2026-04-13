@@ -21,7 +21,7 @@ const (
 	maxWidth            = 60
 	hexBlue      string = "68b0f4"
 	hexLightBlue string = "bddfff"
-	hexGreen     string = "6ef2a0"
+	hexYellow    string = "FFFF00"
 	hexRed       string = "f26e6e"
 )
 
@@ -42,9 +42,9 @@ var (
 			Padding(1, 2).
 			MarginTop(1)
 	outputPassStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#"+hexGreen)).
+			Foreground(lipgloss.Color("#"+hexYellow)).
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#"+hexGreen)).
+			BorderForeground(lipgloss.Color("#"+hexYellow)).
 			Width(maxWidth).
 			Padding(0, 1)
 	outputFailStyle = lipgloss.NewStyle().
@@ -87,8 +87,8 @@ type questionModel struct {
 	lastPass         bool
 }
 
-func initialQuestionModel(user *User) questionModel {
-	session, err := InitializeSession(user)
+func initialQuestionModel(user *User, config SessionConfig) questionModel {
+	session, err := InitializeSession(user, config)
 	if err != nil {
 		log.Fatalf("Failed to initialize session: %v", err)
 	}
@@ -435,7 +435,7 @@ func (m infoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused == len(m.inputs)-1 {
 				m.done = true
 				m.confirmUserInfo()
-				return initialQuestionModel(m.user), nil
+				return initialSelectionModel(m.user), nil
 			}
 			m.focused++
 			progCmd := m.progress.SetPercent(float64(m.focused) / float64(len(m.inputs)))
@@ -500,6 +500,302 @@ func (m infoModel) View() string {
 		"",
 		subtleStyle.Render("enter: next field  •  ctrl+c: quit tool completely"),
 	))
+}
+
+// selection screen
+
+type selectionModel struct {
+	user                 *User
+	topics               []string
+	maxTopicCounts       map[string]int
+	selectedTopicCounts  map[string]int
+	diffs                []int
+	maxDiffCounts        map[int]int
+	selectedDiffCounts   map[int]int
+	globalSelectedTopics map[string]bool
+	globalTotal          int
+	mode                 SelectionMode
+	cursor               int
+	input                textinput.Model
+	isEditing            bool
+}
+
+func initialSelectionModel(user *User) tea.Model {
+	topicCounts, err := FetchTopicsWithCounts()
+	if err != nil {
+		log.Fatalf("failed to fetch topics: %v", err)
+	}
+
+	diffCounts, err := FetchDifficultyWithCounts()
+	if err != nil {
+		log.Fatalf("failed to fetch difficulties: %v", err)
+	}
+
+	var topics []string
+	for t := range topicCounts {
+		topics = append(topics, t)
+	}
+
+	var diffs = []int{1, 2, 3}
+
+	ti := textinput.New()
+	ti.Placeholder = "Enter number"
+	ti.CharLimit = 3
+	ti.Width = 10
+
+	return selectionModel{
+		user:                 user,
+		topics:               topics,
+		maxTopicCounts:       topicCounts,
+		selectedTopicCounts:  make(map[string]int),
+		diffs:                diffs,
+		maxDiffCounts:        diffCounts,
+		selectedDiffCounts:   make(map[int]int),
+		globalSelectedTopics: make(map[string]bool),
+		globalTotal:          0,
+		mode:                 ModeByTopic,
+		input:                ti,
+	}
+}
+
+func (m selectionModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m selectionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	if m.isEditing {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.Type {
+			case tea.KeyEnter:
+				val, _ := strconv.Atoi(m.input.Value())
+				if val < 0 {
+					val = 0
+				}
+				switch m.mode {
+				case ModeByTopic:
+					topic := m.topics[m.cursor]
+					if val > m.maxTopicCounts[topic] {
+						val = m.maxTopicCounts[topic]
+					}
+					m.selectedTopicCounts[topic] = val
+				case ModeGlobal:
+					m.globalTotal = val
+				case ModeByDifficulty:
+					diff := m.diffs[m.cursor]
+					if val > m.maxDiffCounts[diff] {
+						val = m.maxDiffCounts[diff]
+					}
+					m.selectedDiffCounts[diff] = val
+				}
+				m.isEditing = false
+				m.input.Blur()
+				return m, nil
+			case tea.KeyEsc:
+				m.isEditing = false
+				m.input.Blur()
+				return m, nil
+			}
+		}
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			return m, tea.Quit
+		case tea.KeyTab:
+			m.mode = (m.mode + 1) % 3
+			m.cursor = 0
+			return m, nil
+		case tea.KeyUp:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.KeyDown:
+			max := 0
+			switch m.mode {
+			case ModeByTopic:
+				max = len(m.topics) - 1
+			case ModeGlobal:
+				max = len(m.topics) // total input + topics
+			case ModeByDifficulty:
+				max = len(m.diffs) - 1
+			}
+			if m.cursor < max {
+				m.cursor++
+			}
+		case tea.KeyEnter, tea.KeySpace:
+			switch m.mode {
+			case ModeByTopic:
+				m.isEditing = true
+				topic := m.topics[m.cursor]
+				m.input.SetValue(strconv.Itoa(m.selectedTopicCounts[topic]))
+				m.input.Focus()
+			case ModeGlobal:
+				if m.cursor == 0 {
+					m.isEditing = true
+					m.input.SetValue(strconv.Itoa(m.globalTotal))
+					m.input.Focus()
+				} else {
+					topic := m.topics[m.cursor-1]
+					m.globalSelectedTopics[topic] = !m.globalSelectedTopics[topic]
+				}
+			case ModeByDifficulty:
+				m.isEditing = true
+				diff := m.diffs[m.cursor]
+				m.input.SetValue(strconv.Itoa(m.selectedDiffCounts[diff]))
+				m.input.Focus()
+			}
+			return m, nil
+		case tea.KeyCtrlS:
+			config := SessionConfig{Mode: m.mode}
+			hasSelection := false
+
+			switch m.mode {
+			case ModeByTopic:
+				config.TopicCounts = make(map[string]int)
+				for topic, count := range m.selectedTopicCounts {
+					if count > 0 {
+						config.TopicCounts[topic] = count
+						hasSelection = true
+					}
+				}
+			case ModeGlobal:
+				config.GlobalCount = m.globalTotal
+				for topic, selected := range m.globalSelectedTopics {
+					if selected {
+						config.GlobalTopics = append(config.GlobalTopics, topic)
+						hasSelection = true
+					}
+				}
+				if m.globalTotal <= 0 {
+					hasSelection = false
+				}
+			case ModeByDifficulty:
+				config.DifficultyCounts = make(map[int]int)
+				for diff, count := range m.selectedDiffCounts {
+					if count > 0 {
+						config.DifficultyCounts[diff] = count
+						hasSelection = true
+					}
+				}
+			}
+
+			if !hasSelection {
+				return m, nil
+			}
+			return initialQuestionModel(m.user, config), nil
+		}
+	}
+
+	return m, nil
+}
+
+func (m selectionModel) View() string {
+	s := boldStyle.Render("Configure your session") + "\n\n"
+
+	// Mode Selector
+	modes := []string{"By Topic", "Global", "By Difficulty"}
+	modeBar := ""
+	for i, name := range modes {
+		if int(m.mode) == i {
+			modeBar += "[" + boldStyle.Render(name) + "] "
+		} else {
+			modeBar += name + "  "
+		}
+	}
+	s += modeBar + "\n\n"
+
+	switch m.mode {
+	case ModeByTopic:
+		s += subtleStyle.Render("Set number of questions per topic:") + "\n\n"
+		for i, topic := range m.topics {
+			cursor := " "
+			if m.cursor == i {
+				cursor = ">"
+			}
+			count := m.selectedTopicCounts[topic]
+			max := m.maxTopicCounts[topic]
+			topicStr := fmt.Sprintf("%-20s", topic)
+			countStr := fmt.Sprintf("[%d/%d]", count, max)
+
+			if m.cursor == i {
+				if m.isEditing {
+					s += fmt.Sprintf("%s %s %s\n", boldStyle.Render(cursor), topicStr, m.input.View())
+				} else {
+					s += fmt.Sprintf("%s %s %s (Enter to edit)\n", boldStyle.Render(cursor), topicStr, boldStyle.Render(countStr))
+				}
+			} else {
+				s += fmt.Sprintf("  %s %s\n", topicStr, countStr)
+			}
+		}
+
+	case ModeGlobal:
+		s += subtleStyle.Render("Enter total questions and select topics:") + "\n\n"
+		// Total input
+		cur := " "
+		if m.cursor == 0 {
+			cur = ">"
+		}
+		if m.cursor == 0 && m.isEditing {
+			s += fmt.Sprintf("%s Total Questions: %s\n\n", boldStyle.Render(cur), m.input.View())
+		} else {
+			disp := fmt.Sprintf("Total Questions: %d", m.globalTotal)
+			if m.cursor == 0 {
+				s += fmt.Sprintf("%s %s (Enter to edit)\n\n", boldStyle.Render(cur), boldStyle.Render(disp))
+			} else {
+				s += fmt.Sprintf("  %s\n\n", disp)
+			}
+		}
+
+		for i, topic := range m.topics {
+			cur = " "
+			if m.cursor == i+1 {
+				cur = ">"
+			}
+			checked := "[ ]"
+			if m.globalSelectedTopics[topic] {
+				checked = "[x]"
+			}
+			topicStr := fmt.Sprintf("%s %s", checked, topic)
+			if m.cursor == i+1 {
+				s += fmt.Sprintf("%s %s\n", boldStyle.Render(cur), boldStyle.Render(topicStr))
+			} else {
+				s += fmt.Sprintf("  %s\n", topicStr)
+			}
+		}
+
+	case ModeByDifficulty:
+		s += subtleStyle.Render("Set number of questions per difficulty:") + "\n\n"
+		for i, diff := range m.diffs {
+			cursor := " "
+			if m.cursor == i {
+				cursor = ">"
+			}
+			count := m.selectedDiffCounts[diff]
+			max := m.maxDiffCounts[diff]
+			diffStr := fmt.Sprintf("Level %d", diff)
+			countStr := fmt.Sprintf("[%d/%d]", count, max)
+
+			if m.cursor == i {
+				if m.isEditing {
+					s += fmt.Sprintf("%s %-20s %s\n", boldStyle.Render(cursor), diffStr, m.input.View())
+				} else {
+					s += fmt.Sprintf("%s %-20s %s (Enter to edit)\n", boldStyle.Render(cursor), diffStr, boldStyle.Render(countStr))
+				}
+			} else {
+				s += fmt.Sprintf("  %-20s %s\n", diffStr, countStr)
+			}
+		}
+	}
+
+	s += "\n" + subtleStyle.Render("↑/↓: navigate • tab: switch mode • enter/space: select/edit • ctrl+s: start")
+	return containerStyle.Render(s)
 }
 
 // entry point

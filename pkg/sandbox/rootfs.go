@@ -181,7 +181,67 @@ func ExtractRootfs() error {
 	os.MkdirAll(filepath.Join(Rootfs, "tmp"), 0777)
 	os.Chmod(filepath.Join(Rootfs, "tmp"), 01777)
 	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0777)
+	os.Chmod(filepath.Join(Rootfs, "home/ahmed"), 01777)
+	os.MkdirAll(filepath.Join(Rootfs, "root"), 0700)
+	os.MkdirAll(filepath.Join(Rootfs, "etc"), 0755)
 	os.MkdirAll(filepath.Join(Rootfs, "bin"), 0755)
+	os.MkdirAll(filepath.Join(Rootfs, "var/mail"), 0777)
+	os.MkdirAll(filepath.Join(Rootfs, "var/spool/mail"), 0777)
+	os.Chmod(filepath.Join(Rootfs, "var/mail"), 01777)
+	os.Chmod(filepath.Join(Rootfs, "var/spool/mail"), 01777)
+
+	// Copy host assets to sandbox home if the assets directory exists
+	assetsDir := "assets"
+	if pathExists(assetsDir) {
+		files, err := os.ReadDir(assetsDir)
+		if err == nil {
+			for _, f := range files {
+				if !f.IsDir() {
+					srcPath := filepath.Join(assetsDir, f.Name())
+					dstPath := filepath.Join(Rootfs, "home/ahmed", f.Name())
+					
+					src, err := os.Open(srcPath)
+					if err != nil {
+						continue
+					}
+					
+					dst, err := os.Create(dstPath)
+					if err != nil {
+						src.Close()
+						continue
+					}
+					
+					io.Copy(dst, src)
+					src.Close()
+					dst.Close()
+					
+					// ensure the file is readable by the sandbox user
+					os.Chmod(dstPath, 0644)
+				}
+			}
+		}
+	}
+
+	// Create a mock sudo script
+	sudoPath := filepath.Join(Rootfs, "bin/sudo")
+	os.WriteFile(sudoPath, []byte("#!/bin/sh\nexec \"$@\"\n"), 0755)
+
+	// Provision required tools if they exist on the host
+	tools := []string{"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel", "passwd", "usermod", "id", "groups"}
+	for _, tool := range tools {
+		_ = provisionTool(tool)
+	}
+
+	// Ensure /bin/sh points to our new bash provisioned from the host
+	shPath := filepath.Join(Rootfs, "bin/sh")
+	os.Remove(shPath)
+	os.Symlink("bash", shPath)
+
+	// Setup default git identity
+	_ = setupGitConfig()
+
+	// Ensure standard system groups exist for tools like useradd
+	_ = setupStandardGroups()
 
 	return nil
 }
@@ -189,6 +249,7 @@ func ExtractRootfs() error {
 // Sandbox init
 
 func StartSandBox() error {
+	fmt.Fprintf(os.Stderr, "[DEBUG] Sandbox starting. UID: %d, USER: %s\n", os.Getuid(), os.Getenv("SANDBOX_USER"))
 	syscall.Sethostname([]byte("sandbox"))
 
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
@@ -204,6 +265,7 @@ func StartSandBox() error {
 	if err := syscall.Chroot(Rootfs); err != nil {
 		return fmt.Errorf("chroot error: %w", err)
 	}
+
 	if err := os.Chdir("/home/ahmed"); err != nil {
 		return err
 	}
@@ -212,8 +274,21 @@ func StartSandBox() error {
 	os.MkdirAll("/proc", 0755)
 	syscall.Mount("proc", "/proc", "proc", 0, "")
 
-	if err := dropToUser(defaultUser); err != nil {
-		return err
+	// drop to user unless root is requested
+	sandboxUser := os.Getenv("SANDBOX_USER")
+	if sandboxUser == "" {
+		sandboxUser = defaultUser
+	}
+
+	if sandboxUser != "root" {
+		if err := dropToUser(sandboxUser); err != nil {
+			return err
+		}
+	} else {
+		// Explicitly set root environment for Admin Mode
+		os.Setenv("HOME", "/root")
+		os.Setenv("USER", "root")
+		os.Setenv("LOGNAME", "root")
 	}
 
 	switch os.Getenv("SANDBOX_MODE") {
@@ -289,10 +364,10 @@ func runSessionLoop() error {
 		cmd := exec.Command("/bin/sh", "-c", cmdStr)
 		cmd.Dir = cwd
 		cmd.Env = []string{
-			"PATH=/bin:/usr/bin",
-			"HOME=/home/ahmed",
-			"USER=ahmed",
-			"LOGNAME=ahmed",
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"HOME=" + os.Getenv("HOME"),
+			"USER=" + os.Getenv("USER"),
+			"LOGNAME=" + os.Getenv("LOGNAME"),
 			"TERM=xterm",
 			"MANPATH=/usr/share/man:/usr/local/share/man",
 			"PAGER=less",
@@ -366,5 +441,96 @@ func dropToUser(username string) error {
 	os.Setenv("HOME", homeDir)
 	os.Setenv("USER", username)
 	os.Setenv("LOGNAME", username)
+	return nil
+}
+func setupGitConfig() error {
+	config := "[user]\n\tname = OSC Recruit\n\temail = recruit@osc.org\n[init]\n\tdefaultBranch = master\n"
+	return os.WriteFile(filepath.Join(Rootfs, "home/ahmed/.gitconfig"), []byte(config), 0644)
+}
+
+func provisionTool(name string) error {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return err
+	}
+
+	// Determine destination (keep it standard in /bin)
+	dst := filepath.Join(Rootfs, "bin", name)
+	if err := copyFile(path, dst); err != nil {
+		return err
+	}
+
+	// Find dependencies using ldd
+	out, err := exec.Command("ldd", path).Output()
+	if err != nil {
+		return err
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "=>") {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 && strings.HasPrefix(parts[2], "/") {
+				libSrc := parts[2]
+				// Map host /usr/lib or /lib to sandbox /usr/lib
+				libDst := filepath.Join(Rootfs, "usr/lib", filepath.Base(libSrc))
+				os.MkdirAll(filepath.Dir(libDst), 0755)
+				_ = copyFile(libSrc, libDst)
+			}
+		}
+	}
+	return nil
+}
+
+func setupStandardGroups() error {
+	groups := []string{
+		"bin:x:1:",
+		"daemon:x:2:",
+		"sys:x:3:",
+		"adm:x:4:",
+		"tty:x:5:",
+		"disk:x:6:",
+		"lp:x:7:",
+		"mail:x:8:",
+		"kmem:x:9:",
+		"wheel:x:10:",
+		"utmp:x:22:",
+		"staff:x:50:",
+	}
+
+	groupPath := filepath.Join(Rootfs, "etc/group")
+	f, err := os.OpenFile(groupPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, g := range groups {
+		f.WriteString(g + "\n")
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+
+	si, err := os.Stat(src)
+	if err == nil {
+		os.Chmod(dst, si.Mode())
+	}
+
 	return nil
 }
