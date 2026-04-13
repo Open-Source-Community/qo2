@@ -461,24 +461,80 @@ func provisionTool(name string) error {
 		return err
 	}
 
-	// Find dependencies using ldd
+	// Find all shared library dependencies using ldd
 	out, err := exec.Command("ldd", path).Output()
 	if err != nil {
 		return err
 	}
 
 	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		var libSrc string
+
 		if strings.Contains(line, "=>") {
+			// Standard lib line: "libfoo.so.X => /real/path/libfoo.so.X (0x...)"
 			parts := strings.Fields(line)
 			if len(parts) >= 3 && strings.HasPrefix(parts[2], "/") {
-				libSrc := parts[2]
-				// Map host /usr/lib or /lib to sandbox /usr/lib
-				libDst := filepath.Join(Rootfs, "usr/lib", filepath.Base(libSrc))
-				os.MkdirAll(filepath.Dir(libDst), 0755)
-				_ = copyFile(libSrc, libDst)
+				libSrc = parts[2]
+			}
+		} else if strings.HasPrefix(line, "/") {
+			// Dynamic linker: "/lib64/ld-linux-x86-64.so.2 (0x...)"
+			parts := strings.Fields(line)
+			if len(parts) >= 1 {
+				libSrc = parts[0]
 			}
 		}
+
+		if libSrc == "" {
+			continue
+		}
+
+		// Provision the library preserving host paths (cross-distro compatible)
+		_ = provisionLib(libSrc)
 	}
+	return nil
+}
+
+// provisionLib copies a host library into the sandbox at its exact host path.
+// This is cross-distro compatible: it preserves paths like
+//   - /usr/lib/libc.so.6            (Arch/Fedora)
+//   - /lib/x86_64-linux-gnu/libc.so.6 (Ubuntu/Debian)
+//
+// Inside the sandbox, /lib and /lib64 are symlinks to usr/lib, so os
+// functions will follow them automatically, placing files in the right spot.
+func provisionLib(hostPath string) error {
+	// Resolve any symlinks on the HOST to get to the real file
+	realPath, err := filepath.EvalSymlinks(hostPath)
+	if err != nil {
+		realPath = hostPath
+	}
+
+	// Copy the real file into the sandbox at its exact path.
+	// Note: os.MkdirAll and file ops follow sandbox symlinks (e.g. /lib -> usr/lib),
+	// so Ubuntu's /lib/x86_64-linux-gnu/ will correctly land under usr/lib/.
+	sandboxDst := filepath.Join(Rootfs, realPath)
+	if err := os.MkdirAll(filepath.Dir(sandboxDst), 0755); err != nil {
+		return err
+	}
+	if err := copyFile(realPath, sandboxDst); err != nil {
+		return err
+	}
+
+	// If the original hostPath was a symlink, recreate that symlink in the sandbox
+	// so that both the original name and real name resolve correctly.
+	if realPath != hostPath {
+		sandboxLink := filepath.Join(Rootfs, hostPath)
+		os.MkdirAll(filepath.Dir(sandboxLink), 0755)
+		if _, err := os.Lstat(sandboxLink); os.IsNotExist(err) {
+			// Use relative symlink target if in the same directory
+			target := realPath
+			if filepath.Dir(hostPath) == filepath.Dir(realPath) {
+				target = filepath.Base(realPath)
+			}
+			_ = os.Symlink(target, sandboxLink)
+		}
+	}
+
 	return nil
 }
 
