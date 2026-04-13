@@ -129,6 +129,7 @@ func (m questionModel) skipTopic() (tea.Model, tea.Cmd) {
 	_ = m.session.AdvanceTopic(false)
 	m.session.AdvanceQuestion()
 	m.textarea.Reset()
+	m.showOutput = false
 	return m, nil
 }
 
@@ -136,6 +137,7 @@ func (m questionModel) skipDifficulty() (tea.Model, tea.Cmd) {
 	_ = m.session.IncreaseDifficulty(false)
 	m.session.AdvanceQuestion()
 	m.textarea.Reset()
+	m.showOutput = false
 	return m, nil
 }
 
