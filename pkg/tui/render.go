@@ -126,6 +126,10 @@ func (m questionModel) Init() tea.Cmd {
 }
 
 func (m questionModel) skipTopic() (tea.Model, tea.Cmd) {
+	if q, err := m.session.GetCurrentQuestion(); err == nil && q != nil {
+		q.score = 0
+		m.session.SubmitAnswer("SKIPPED TOPIC")
+	}
 	_ = m.session.AdvanceTopic(false)
 	m.session.AdvanceQuestion()
 	m.textarea.Reset()
@@ -134,6 +138,10 @@ func (m questionModel) skipTopic() (tea.Model, tea.Cmd) {
 }
 
 func (m questionModel) skipDifficulty() (tea.Model, tea.Cmd) {
+	if q, err := m.session.GetCurrentQuestion(); err == nil && q != nil {
+		q.score = 0
+		m.session.SubmitAnswer("SKIPPED DIFFICULTY")
+	}
 	_ = m.session.IncreaseDifficulty(false)
 	m.session.AdvanceQuestion()
 	m.textarea.Reset()
@@ -142,6 +150,10 @@ func (m questionModel) skipDifficulty() (tea.Model, tea.Cmd) {
 }
 
 func (m questionModel) skipQuestion() (tea.Model, tea.Cmd) {
+	if q, err := m.session.GetCurrentQuestion(); err == nil && q != nil {
+		q.score = 0
+		m.session.SubmitAnswer("SKIPPED")
+	}
 	m.session.AdvanceQuestion()
 	m.textarea.Reset()
 	m.showOutput = false
