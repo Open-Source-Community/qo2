@@ -125,6 +125,33 @@ func (m questionModel) Init() tea.Cmd {
 	return textarea.Blink
 }
 
+func (m questionModel) skipTopic() (tea.Model, tea.Cmd) {
+	_ = m.session.AdvanceTopic(false)
+	m.session.AdvanceQuestion()
+	m.textarea.Reset()
+	return m, nil
+}
+
+func (m questionModel) skipDifficulty() (tea.Model, tea.Cmd) {
+	_ = m.session.IncreaseDifficulty(false)
+	m.session.AdvanceQuestion()
+	m.textarea.Reset()
+	return m, nil
+}
+
+func (m questionModel) skipQuestion() (tea.Model, tea.Cmd) {
+	m.session.AdvanceQuestion()
+	m.textarea.Reset()
+	m.showOutput = false
+	return m, nil
+}
+
+func (m questionModel) finishSession() (tea.Model, tea.Cmd) {
+	m.session.currentQuestion = -1
+	m.session.Finalize()
+	return m, nil
+}
+
 func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
@@ -153,6 +180,23 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.Type {
+		case tea.KeyCtrlG:
+			if !m.grading {
+				return m.skipTopic()
+			}
+		case tea.KeyCtrlD:
+			if !m.grading {
+				return m.skipDifficulty()
+			}
+		case tea.KeyCtrlN:
+			if !m.grading {
+				return m.skipQuestion()
+			}
+		case tea.KeyCtrlF:
+			if !m.grading {
+				return m.finishSession()
+			}
+
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 
@@ -325,15 +369,19 @@ func (m questionModel) View() string {
 
 	m.questionViewport.SetContent(questionStyle.Render(q.text))
 
-	parts := []string{
-		boldStyle.Render(m.session.questionSet.title),
-		"",
-		subtleStyle.Render(fmt.Sprintf("topic: %s  •  difficulty: %s  •  one attempt? %t",
+	// Format Title like: "Topic Name ### x"
+	diffLvl := m.session.currentDifficulty
+	if diffLvl < 1 { diffLvl = 1 } // just in case
+	diffTags := strings.Repeat("#", diffLvl)
+	attemptTag := ""
+	if m.session.questionSet.questions[m.session.currentQuestion].oneShot {
+		attemptTag = " x"
+	}
+	titleStr := fmt.Sprintf("%s %s%s", m.session.GetCurrentTopic(), diffTags, attemptTag)
 
-			m.session.GetCurrentTopic(),
-			m.session.GetCurrentDifficulty(),
-			m.session.questionSet.questions[m.session.currentQuestion].oneShot,
-		)),
+	parts := []string{
+		boldStyle.Render(titleStr),
+		"",
 		m.questionViewport.View(),
 		"",
 	}
@@ -366,7 +414,6 @@ func (m questionModel) View() string {
 			subtleStyle.Render(label),
 			outputBox.Render(m.outputViewport.View()),
 			"",
-			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute"),
 		)
 	} else {
 		parts = append(parts,
@@ -375,7 +422,6 @@ func (m questionModel) View() string {
 			"",
 			//m.progress.View(),
 			"",
-			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute"),
 		)
 	}
 

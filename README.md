@@ -105,6 +105,17 @@ Launches secure testing environment for students to complete challenges.
 sudo qo start -i 2021170034 -a midterm-exam.enc -p securepass -k abc123 -d 2h 
 ```
 
+### Interactive Shortcuts
+
+During an active quiz session, you can use the following keyboard shortcuts to manage the flow:
+
+- **`Ctrl+E`**: Execute sandbox command and grade the answer.
+- **`Ctrl+S`**: Advance to the next question (after execution).
+- **`Ctrl+N`**: Skip the current question.
+- **`Ctrl+D`**: Skip to the next difficulty level.
+- **`Ctrl+G`**: Skip the entire current topic.
+- **`Ctrl+F`**: Finish the session early, save your grade, and exit.
+
 ## Challenge Folder Structure
 
 Your challenge folder should follow this structure:
