@@ -21,33 +21,41 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 2. Detect Package Manager and Install Dependencies
-echo -e "${BLUE}[1/4] Installing dependencies...${NC}"
+echo -e "${BLUE}[1/5] Installing dependencies...${NC}"
 
 if command -v pacman >/dev/null; then
     echo -e "Detected ${GREEN}Arch Linux${NC}"
-    sudo pacman -Sy --needed --noconfirm go sqlite git tar
+    sudo pacman -Sy --needed --noconfirm go sqlite git tar kitty zip gzip bzip2
 elif command -v apt-get >/dev/null; then
     echo -e "Detected ${GREEN}Debian/Ubuntu${NC}"
     sudo apt-get update
-    sudo apt-get install -y golang sqlite3 git tar
+    sudo apt-get install -y golang sqlite3 git tar kitty zip gzip bzip2
 elif command -v dnf >/dev/null; then
     echo -e "Detected ${GREEN}Fedora${NC}"
-    sudo dnf install -y golang sqlite git tar
+    sudo dnf install -y golang sqlite git tar kitty zip gzip bzip2
 else
-    echo -e "${RED}Unsupported package manager. Please install 'go', 'sqlite3', and 'git' manually.${NC}"
+    echo -e "${RED}Unsupported package manager. Please install 'go', 'sqlite3', 'git', 'gzip', and 'bzip2' manually.${NC}"
 fi
 
-# 3. Verify Database
-echo -e "${BLUE}[2/4] Verifying database...${NC}"
-if [ -f "linux.db" ]; then
-    echo -e "${GREEN}Using existing linux.db file.${NC}"
+# 3. Clone or Enter Directory
+echo -e "${BLUE}[2/5] Fetching source code...${NC}"
+if [ -f "main.go" ] && [ -d "pkg" ]; then
+    echo -e "${GREEN}Already in project directory.${NC}"
 else
-    echo -e "${YELLOW}Warning: linux.db not found in root directory.${NC}"
-    echo -e "You may need to run your SQL scripts to initialize the database."
+    if [ ! -d "qo2" ]; then
+        echo -e "Cloning repository..."
+        git clone https://github.com/Open-Source-Community/qo2.git
+    else
+        echo -e "${GREEN}Directory 'qo2' already exists. Updating...${NC}"
+        cd qo2
+        git pull origin main
+        cd ..
+    fi
+    cd qo2
 fi
 
 # 4. Git Configuration Check
-echo -e "${BLUE}[3/4] Checking Git configuration...${NC}"
+echo -e "${BLUE}[3/5] Checking Git configuration...${NC}"
 if ! git config --global user.email >/dev/null; then
     echo -e "${YELLOW}Setting up default Git identity (OSC Recruit)...${NC}"
     git config --global user.email "recruit@osc.org"
@@ -58,15 +66,19 @@ else
 fi
 
 # 5. Build the Application
-echo -e "${BLUE}[4/4] Building the application...${NC}"
+echo -e "${BLUE}[4/5] Building the application...${NC}"
 if [ -f "main.go" ]; then
     go build -o qo main.go
     echo -e "${GREEN}Build successful! Binary created: ./qo${NC}"
 else
-    echo -e "${RED}Error: main.go not found. Are you in the right directory?${NC}"
+    echo -e "${RED}Error: main.go not found. Build failed.${NC}"
     exit 1
 fi
 
 echo -e "\n${GREEN}=== Setup Complete ===${NC}"
 echo -e "To start the quiz, run:"
-echo -e "  ${BLUE}sudo ./qo start${NC}\n"
+if [ $(basename "$PWD") == "qo2" ]; then
+    echo -e "  ${BLUE}sudo ./qo start${NC}\n"
+else
+    echo -e "  ${BLUE}cd qo2 && sudo ./qo start${NC}\n"
+fi

@@ -227,7 +227,7 @@ func ExtractRootfs() error {
 	os.WriteFile(sudoPath, []byte("#!/bin/sh\nexec \"$@\"\n"), 0755)
 
 	// Provision required tools if they exist on the host
-	tools := []string{"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel", "passwd", "usermod", "id", "groups"}
+	tools := []string{"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel", "passwd", "usermod", "id", "groups", "zip", "gzip", "bzip2", "tar", "find"}
 	for _, tool := range tools {
 		_ = provisionTool(tool)
 	}
