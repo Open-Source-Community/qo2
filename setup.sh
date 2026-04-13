@@ -44,11 +44,12 @@ if [ -f "main.go" ] && [ -d "pkg" ]; then
 else
     if [ ! -d "qo2" ]; then
         echo -e "Cloning repository..."
-        git clone https://github.com/Open-Source-Community/qo2.git
+        git clone -b interview https://github.com/Open-Source-Community/qo2.git
     else
         echo -e "${GREEN}Directory 'qo2' already exists. Updating...${NC}"
         cd qo2
-        git pull origin main
+        git checkout interview 2>/dev/null || git checkout -b interview origin/interview
+        git pull origin interview
         cd ..
     fi
     cd qo2

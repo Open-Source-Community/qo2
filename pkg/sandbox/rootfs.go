@@ -456,6 +456,7 @@ func provisionTool(name string) error {
 
 	// Determine destination (keep it standard in /bin)
 	dst := filepath.Join(Rootfs, "bin", name)
+	os.Remove(dst)
 	if err := copyFile(path, dst); err != nil {
 		return err
 	}
