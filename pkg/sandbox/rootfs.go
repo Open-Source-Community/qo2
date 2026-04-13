@@ -226,6 +226,10 @@ func ExtractRootfs() error {
 	sudoPath := filepath.Join(Rootfs, "bin/sudo")
 	os.WriteFile(sudoPath, []byte("#!/bin/sh\nexec \"$@\"\n"), 0755)
 
+	// Ensure /lib, /lib64, /usr/lib64 all point to /usr/lib so that
+	// provisioned libraries from any distro layout are found correctly.
+	ensureLibSymlinks()
+
 	// Provision required tools if they exist on the host
 	tools := []string{"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel", "passwd", "usermod", "id", "groups", "zip", "gzip", "bzip2", "tar", "find"}
 	for _, tool := range tools {
@@ -536,6 +540,44 @@ func provisionLib(hostPath string) error {
 	}
 
 	return nil
+}
+
+// ensureLibSymlinks guarantees that /lib, /lib64, /usr/lib64, and /usr/bin
+// inside the sandbox all resolve correctly, regardless of host distro layout.
+// - Arch/Fedora: /usr/lib contains everything; /lib64 & /lib are already symlinks.
+// - Ubuntu/Debian: libraries live under /lib/x86_64-linux-gnu/ which the os
+//   functions redirect through the /lib -> usr/lib symlink we ensure here.
+func ensureLibSymlinks() {
+	usrLib := filepath.Join(Rootfs, "usr/lib")
+	os.MkdirAll(usrLib, 0755)
+
+	// /lib -> usr/lib
+	libPath := filepath.Join(Rootfs, "lib")
+	if fi, err := os.Lstat(libPath); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(libPath)
+		os.Symlink("usr/lib", libPath)
+	}
+
+	// /lib64 -> usr/lib
+	lib64Path := filepath.Join(Rootfs, "lib64")
+	if fi, err := os.Lstat(lib64Path); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(lib64Path)
+		os.Symlink("usr/lib", lib64Path)
+	}
+
+	// /usr/lib64 -> lib (so /usr/lib64 -> usr/lib too)
+	usrLib64 := filepath.Join(Rootfs, "usr/lib64")
+	if fi, err := os.Lstat(usrLib64); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(usrLib64)
+		os.Symlink("lib", usrLib64)
+	}
+
+	// /usr/bin -> /bin so provisioned tools in /bin are found via /usr/bin PATH
+	usrBin := filepath.Join(Rootfs, "usr/bin")
+	if fi, err := os.Lstat(usrBin); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(usrBin)
+		os.Symlink("../bin", usrBin)
+	}
 }
 
 func setupStandardGroups() error {
