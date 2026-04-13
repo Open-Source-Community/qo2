@@ -22,7 +22,7 @@ A tool for creating customizable sandboxed Linux environments for educational te
 Run this command to install `qo`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/interview/setup.sh | bash
 ```
 
 ## Quick Start
