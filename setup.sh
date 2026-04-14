@@ -67,13 +67,13 @@ else
 fi
 
 # 5. Managing submodules
-echo -e "${BLUE}[4/5] Setting up submodules...${NC}"
-if [ ! -d "recruit-data" ]; then
-    echo -e "Adding Linux-25-Recruit submodule..."
-    git submodule add https://github.com/Open-Source-Community/Linux-25-Recruit.git recruit-data || true
-fi
-git submodule update --init --recursive
-echo -e "${GREEN}Submodules updated successfully.${NC}"
+# echo -e "${BLUE}[4/5] Setting up submodules...${NC}"
+# if [ ! -d "recruit-data" ]; then
+#     echo -e "Adding Linux-25-Recruit submodule..."
+#     git submodule add https://github.com/Open-Source-Community/Linux-25-Recruit.git recruit-data || true
+# fi
+# git submodule update --init --recursive
+# echo -e "${GREEN}Submodules updated successfully.${NC}"
 
 # 6. Build the Application
 echo -e "${BLUE}[5/5] Building the application...${NC}"
