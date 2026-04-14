@@ -614,6 +614,7 @@ func initialSelectionModel(user *User) tea.Model {
 	for t := range topicCounts {
 		topics = append(topics, t)
 	}
+	SortTopics(topics)
 
 	var diffs = []int{1, 2, 3}
 

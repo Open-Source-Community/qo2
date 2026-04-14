@@ -63,11 +63,20 @@ if ! git config --global user.email >/dev/null; then
     git config --global user.name "OSC Recruit"
     git config --global init.defaultBranch "master"
 else
-    echo -e "${GREEN}Git identity already configured.${NC}"
+	echo -e "${GREEN}Git identity already configured.${NC}"
 fi
 
-# 5. Build the Application
-echo -e "${BLUE}[4/5] Building the application...${NC}"
+# 5. Managing submodules
+echo -e "${BLUE}[4/5] Setting up submodules...${NC}"
+if [ ! -d "recruit-data" ]; then
+    echo -e "Adding Linux-25-Recruit submodule..."
+    git submodule add https://github.com/Open-Source-Community/Linux-25-Recruit.git recruit-data || true
+fi
+git submodule update --init --recursive
+echo -e "${GREEN}Submodules updated successfully.${NC}"
+
+# 6. Build the Application
+echo -e "${BLUE}[5/5] Building the application...${NC}"
 if [ -f "main.go" ]; then
     go build -o qo main.go
     echo -e "${GREEN}Build successful! Binary created: ./qo${NC}"

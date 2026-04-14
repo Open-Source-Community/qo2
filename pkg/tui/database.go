@@ -5,12 +5,48 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ahmedYasserM/qo/pkg/sandbox"
 	_ "modernc.org/sqlite"
 )
+
+
+var PreferredTopicOrder = []string{
+	"Linux",
+	"Archiving & Compression",
+	"File System Navigation",
+	"Text processing",
+	"User & Group Management",
+	"Permissions",
+	"Pipelining & Redirection",
+	"Git & GitHub",
+}
+
+func SortTopics(topics []string) {
+	orderMap := make(map[string]int)
+	for i, topic := range PreferredTopicOrder {
+		orderMap[topic] = i
+	}
+
+	sort.Slice(topics, func(i, j int) bool {
+		idxI, okI := orderMap[topics[i]]
+		idxJ, okJ := orderMap[topics[j]]
+
+		if okI && okJ {
+			return idxI < idxJ
+		}
+		if okI {
+			return true
+		}
+		if okJ {
+			return false
+		}
+		return topics[i] < topics[j]
+	})
+}
 
 type User struct {
 	user_id int64
@@ -346,6 +382,7 @@ func initializeQuestionSet(title string, instructions string, db *sql.DB, config
 		}
 	}
 
+	SortTopics(topics)
 	return &QuestionSet{title: title, instructions: instructions, topics: topics}, nil
 
 }
