@@ -155,6 +155,10 @@ func initDB(dsnURI string) (*sql.DB, error) {
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+
+	// Runtime migration: ensure submissions table has a result column
+	_, _ = db.Exec("ALTER TABLE submissions ADD COLUMN result TEXT")
+
 	return db, nil
 }
 
@@ -605,18 +609,32 @@ func (session *Session) Finalize() error {
 	return nil
 }
 
-func (session *Session) SubmitAnswer(answer string) error {
+func (session *Session) SubmitAnswer(answer string, result string) error {
 	q, _ := session.GetCurrentQuestion()
 	q.answer = answer
-	submissionStmt, err := session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score) values(?, ?, ?, ?)")
+	q.result = result
+	submissionStmt, err := session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score, result) values(?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
-	_, err = submissionStmt.Exec(session.id, q.id, q.answer, q.score)
+	defer submissionStmt.Close()
+	_, err = submissionStmt.Exec(session.id, q.id, q.answer, q.score, q.result)
 	if err != nil {
 		return err
 	}
-	return nil
+
+	// Incremental update for session score ensure sessions table always has latest progress
+	session.score += q.score
+	session.result = fmt.Sprintf("%d/%d", session.score, len(session.questionSet.questions))
+
+	updateStmt, err := session.db.Prepare(`UPDATE sessions SET score = ?, result = ? WHERE session_id = ?;`)
+	if err != nil {
+		return err
+	}
+	defer updateStmt.Close()
+
+	_, err = updateStmt.Exec(session.score, session.result, session.id)
+	return err
 }
 
 func CloseDB(db *sql.DB) {

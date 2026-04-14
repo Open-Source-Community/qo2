@@ -217,6 +217,8 @@ func ExtractRootfs() error {
 					
 					// ensure the file is readable by the sandbox user
 					os.Chmod(dstPath, 0644)
+					// chown to ahmed (uid=1000, gid=1000) so the sandbox user can modify it
+					os.Chown(dstPath, 1000, 1000)
 				}
 			}
 		}
@@ -231,7 +233,13 @@ func ExtractRootfs() error {
 	ensureLibSymlinks()
 
 	// Provision required tools if they exist on the host
-	tools := []string{"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel", "passwd", "usermod", "id", "groups", "zip", "gzip", "bzip2", "tar", "find"}
+	tools := []string{
+		"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel",
+		"passwd", "usermod", "id", "groups", "zip", "gzip", "bzip2", "tar", "find",
+		"tail", "head", "stat", "df", "du", "free", "chmod", "chown", "wc", "tee",
+		"sed", "touch", "rm", "mkdir", "zcat", "cp", "mv", "cut", "sort", "uniq",
+		"whoami", "pwd",
+	}
 	for _, tool := range tools {
 		_ = provisionTool(tool)
 	}

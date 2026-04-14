@@ -128,7 +128,7 @@ func (m questionModel) Init() tea.Cmd {
 func (m questionModel) skipTopic() (tea.Model, tea.Cmd) {
 	if q, err := m.session.GetCurrentQuestion(); err == nil && q != nil {
 		q.score = 0
-		m.session.SubmitAnswer("SKIPPED TOPIC")
+		m.session.SubmitAnswer("SKIPPED TOPIC", "skipped")
 	}
 	_ = m.session.AdvanceTopic(false)
 	m.session.AdvanceQuestion()
@@ -140,7 +140,7 @@ func (m questionModel) skipTopic() (tea.Model, tea.Cmd) {
 func (m questionModel) skipDifficulty() (tea.Model, tea.Cmd) {
 	if q, err := m.session.GetCurrentQuestion(); err == nil && q != nil {
 		q.score = 0
-		m.session.SubmitAnswer("SKIPPED DIFFICULTY")
+		m.session.SubmitAnswer("SKIPPED DIFFICULTY", "skipped")
 	}
 	_ = m.session.IncreaseDifficulty(false)
 	m.session.AdvanceQuestion()
@@ -152,7 +152,7 @@ func (m questionModel) skipDifficulty() (tea.Model, tea.Cmd) {
 func (m questionModel) skipQuestion() (tea.Model, tea.Cmd) {
 	if q, err := m.session.GetCurrentQuestion(); err == nil && q != nil {
 		q.score = 0
-		m.session.SubmitAnswer("SKIPPED")
+		m.session.SubmitAnswer("SKIPPED", "skipped")
 	}
 	m.session.AdvanceQuestion()
 	m.textarea.Reset()
@@ -193,6 +193,17 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
+		// Prevent panics on the final screen by blocking all keys except exit
+		if m.session.currentQuestion == -1 {
+			if msg.Type == tea.KeyCtrlC {
+				if m.session != nil {
+					m.session.Finalize()
+				}
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlG:
 			if !m.grading {
@@ -212,6 +223,9 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyCtrlC:
+			if m.session != nil {
+				m.session.Finalize()
+			}
 			return m, tea.Quit
 
 		case tea.KeyEsc:
@@ -309,7 +323,12 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if oldQ.cleanup_script != "" {
 				m.session.sandbox.Run(oldQ.cleanup_script)
 			}
-			m.session.SubmitAnswer(q.answer)
+			
+			res := "fail"
+			if oldQ.score > 0 {
+				res = "pass"
+			}
+			m.session.SubmitAnswer(q.answer, res)
 
 			m.session.AdvanceQuestion()
 
@@ -391,7 +410,7 @@ func (m questionModel) View() string {
 	if m.session.questionSet.questions[m.session.currentQuestion].oneShot {
 		attemptTag = " x"
 	}
-	titleStr := fmt.Sprintf("%s %s%s", m.session.GetCurrentTopic(), diffTags, attemptTag)
+	titleStr := fmt.Sprintf("Question %d: %s %s%s", m.session.currentQuestion+1, m.session.GetCurrentTopic(), diffTags, attemptTag)
 
 	parts := []string{
 		boldStyle.Render(titleStr),
