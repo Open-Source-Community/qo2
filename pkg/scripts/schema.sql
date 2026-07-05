@@ -5,22 +5,11 @@ CREATE TABLE "questions" (
 	"text"	TEXT NOT NULL,
 	"topic"	TEXT,
 	"difficulty"	INTEGER,
-	"model_answer"	TEXT,
-	"test_script"	TEXT,
+    "test_script"	TEXT,
 	"setup_script"	TEXT,
 	"cleanup_script"	TEXT,
-	"source"	TEXT,
-    "oneShot"   INTEGER,
+    "oneShot"           BOOLEAN,
 	PRIMARY KEY("question_id")
-);
-DROP TABLE IF EXISTS "users";
-CREATE TABLE users (
-    user_id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE,
-    phone TEXT,
-    year INTEGER,
-    oscian BOOLEAN DEFAULT false
 );
 DROP TABLE IF EXISTS "sessions";
 CREATE TABLE sessions (
@@ -39,8 +28,26 @@ CREATE TABLE submissions (
     question_id INTEGER,
     answer TEXT,
     score INTEGER,
-    result text,
+    result TEXT,
     FOREIGN KEY (session_id) REFERENCES sessions (session_id),
     FOREIGN KEY (question_id) REFERENCES questions (question_id)
 );
+DROP TABLE IF EXISTS "users";
+CREATE TABLE users (
+    user_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE,
+    phone TEXT,
+    year INTEGER,
+    oscian BOOLEAN DEFAULT 0
+);
 
+DROP TABLE IF EXISTS "question-grading";
+CREATE TABLE "question-grading" (
+    question_id INTEGER PRIMARY KEY,
+    "model_answer"	TEXT,
+	"source"	TEXT,
+    FOREIGN KEY (question_id) REFERENCES questions (question_id)
+
+);
+COMMIT;

@@ -70,35 +70,31 @@ type Session struct {
 
 type Question struct {
 	// basic data
-	id           int64
-	text         string
-	topic        string
-	difficulty   int
-	model_answer string
-	oneShot      bool
-	attempted    bool
+	id         int64
+	text       string
+	topic      string
+	difficulty int
+	oneShot    bool
 
 	// accompanying scripts
 	test_script    string
 	setup_script   string
 	cleanup_script string
-	source         string
 
 	// non-database fields: response
-	answer string
-	score  int
-	result string
+	attempted bool
+	answer    string
+	score     int
+	result    string
 }
 
 func (q Question) String() string {
 	return fmt.Sprintf(
-		"[ID: %d\tDifficulty: %d] (%s)\nQuestion: %s\nModel Answer: %s\nSource: %s",
+		"[ID: %d\tDifficulty: %d] (%s)\nQuestion: %s",
 		q.id,
 		q.difficulty,
 		q.topic,
 		q.text,
-		q.model_answer,
-		q.source,
 	)
 }
 
@@ -182,7 +178,7 @@ func saveUserInfo(user *User, db *sql.DB) error {
 func generateQuestionSet(title string, instructions string, db *sql.DB) (*QuestionSet, error) {
 	// for each topic and difficulty, select one question
 	// thus, 3 questions for each topic: easy (1), medium (2) and hard (3)
-	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, model_answer, test_script, setup_script, cleanup_script, source, oneShot
+	rows, err := db.Query(`SELECT question_id, text, topic, difficulty, test_script, setup_script, cleanup_script, oneShot
 							FROM (
 								SELECT *, ROW_NUMBER() OVER(PARTITION BY topic, difficulty ORDER BY RANDOM()) as rn
 								FROM questions
@@ -195,10 +191,10 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 	defer rows.Close()
 
 	var (
-		qs                                                                   []*Question
-		q                                                                    *Question
-		_model_answer, _test_script, _setup_script, _cleanup_script, _source sql.NullString
-		_oneShot                                                             sql.NullInt64
+		qs                                           []*Question
+		q                                            *Question
+		_test_script, _setup_script, _cleanup_script sql.NullString
+		_oneShot                                     sql.NullBool
 	)
 	for rows.Next() {
 		q = &Question{}
@@ -207,18 +203,13 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 			&(q.text),
 			&(q.topic),
 			&(q.difficulty),
-			&_model_answer,
 			&_test_script,
 			&_setup_script,
 			&_cleanup_script,
-			&_source,
 			&_oneShot,
 		)
 		if err != nil {
 			return nil, err
-		}
-		if _model_answer.Valid {
-			q.model_answer = _model_answer.String
 		}
 		if _test_script.Valid {
 			q.test_script = _test_script.String
@@ -229,11 +220,8 @@ func generateQuestionSet(title string, instructions string, db *sql.DB) (*Questi
 		if _cleanup_script.Valid {
 			q.cleanup_script = _cleanup_script.String
 		}
-		if _source.Valid {
-			q.source = _source.String
-		}
 		if _oneShot.Valid {
-			q.oneShot = _oneShot.Int64 == 1
+			q.oneShot = _oneShot.Bool
 		}
 		qs = append(qs, q)
 
