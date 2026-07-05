@@ -2,6 +2,7 @@ package tui
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -84,11 +85,9 @@ type Question struct {
 	source         string
 
 	// non-database fields: response
-	answer        string
-	score         int
-	result        string
-	sandboxOutput string // stdout captured from sandbox execution
-
+	answer string
+	score  int
+	result string
 }
 
 func (q Question) String() string {
@@ -103,58 +102,49 @@ func (q Question) String() string {
 	)
 }
 
-// gradeWithModelAnswer is the fallback grader when no test_script is present.
-func (q *Question) gradeWithModelAnswer() {
-	userAns := strings.TrimSpace(q.answer)
-	modelAns := strings.TrimSpace(q.model_answer)
-	if strings.EqualFold(userAns, modelAns) {
-		q.score = 1
-	} else {
-		q.score = 0
-	}
-}
-
 // attempt to run script in sandbox - usefull for debugging (read error)
-func (q *Question) gradeWithSandbox(s *sandbox.SandboxSession) error {
-	if s == nil || q.test_script == "" {
-		q.gradeWithModelAnswer()
-		return nil
-	}
-
-	// run setup script if present
+func (q *Question) gradeWithSandbox(s *sandbox.SandboxSession) (string, error) {
+	// 1. Run Setup
 	if q.setup_script != "" {
-		if _, err := s.Run(q.setup_script); err != nil {
-			return fmt.Errorf("setup_script failed: %w", err)
+		setupOutput, errSetup := s.Run(q.setup_script)
+		if errSetup != nil || strings.Contains(setupOutput, "sh error:") {
+			q.score = 0
+			q.result = "error"
+			_, errClean := s.Run(q.cleanup_script)
+			return "", errors.Join(fmt.Errorf("setup failed: %w", errSetup), errClean)
 		}
 	}
 
-	// write the candidate's answer as a shell command, then run the test
-	if q.answer != "" {
-		if _, err := s.Run(q.answer); err != nil {
-			// answer failed to execute — still run the test to get a score
-		}
-	}
-
-	output, err := s.Run(q.test_script)
-	if err != nil {
-		return fmt.Errorf("test_script failed: %w", err)
-	}
-	q.sandboxOutput = output
-
-	if strings.Contains(output, "PASS") {
-		q.score = 1
-		q.result = "pass"
-	} else {
+	// 2. Run Student Answer
+	output, errAns := s.Run(q.answer)
+	if errAns != nil || strings.Contains(output, "sh error:") {
 		q.score = 0
 		q.result = "fail"
+		_, errClean := s.Run(q.cleanup_script)
+		return output, errors.Join(fmt.Errorf("running answer failed: %w", errAns), errClean)
 	}
 
-	// run cleanup script regardless of result
-	if q.cleanup_script != "" {
-		_, _ = s.Run(q.cleanup_script)
+	// 3. Run Test Script
+	testOutput, errTest := s.Run(q.test_script)
+
+	// 4. Evaluate Results based on Test Output
+	if errTest != nil || strings.Contains(testOutput, "sh error:") {
+		q.score = 0
+		q.result = "fail"
+		if errTest != nil {
+			errTest = fmt.Errorf("running test failed: %w", errTest)
+		}
+	} else {
+		q.score = 1
+		q.result = "pass"
 	}
 
-	return nil
+	// 5. Run Cleanup
+	cleanOutput, errClean := s.Run(q.cleanup_script)
+	if errClean != nil || strings.Contains(cleanOutput, "sh error:") {
+		errClean = fmt.Errorf("cleanup failed: %w", errClean)
+	}
+	return output, errors.Join(errTest, errClean)
 }
 
 func initDB(dsnURI string) (*sql.DB, error) {
@@ -295,14 +285,6 @@ func InitializeSession(user *User) (*Session, error) {
 	}, nil
 }
 
-func (session *Session) GradeCurrentQuestion(index int) error {
-	if index < 0 || index >= len(session.questionSet.questions) {
-		return fmt.Errorf("question index %d out of range", index)
-	}
-	q := session.questionSet.questions[index]
-	return q.gradeWithSandbox(session.sandbox)
-}
-
 // SaveSession persists the session results and closes the sandbox.
 func (session *Session) SaveSession() error {
 	// close sandbox first — done executing commands
@@ -330,11 +312,8 @@ func (session *Session) SaveSession() error {
 	return nil
 }
 
-func (session *Session) SubmitAnswer(currentQuestion int, answer string) error {
+func (session *Session) SubmitQuestion(currentQuestion int) error {
 	q := session.questionSet.questions[currentQuestion]
-	q.answer = answer
-	session.GradeCurrentQuestion(currentQuestion)
-
 	submissionStmt, err := session.db.Prepare("INSERT INTO submissions(session_id, question_id, answer, score, result) values(?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
