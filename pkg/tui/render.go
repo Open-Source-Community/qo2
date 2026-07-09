@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ahmedYasserM/qo/pkg/database"
+
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -65,12 +67,6 @@ var (
 	windowWidth  = 0
 )
 
-type QuestionSet struct {
-	title        string
-	instructions string
-	questions    []*Question
-}
-
 // tea messages
 
 // gradingDoneMsg is sent back to the model when async grading finishes.
@@ -89,8 +85,9 @@ type questionModel struct {
 	questionViewport viewport.Model
 	outputViewport   viewport.Model
 	spinner          spinner.Model
-	session          *Session
-	questionSet      *QuestionSet
+	session          *database.Session
+	client           database.Client
+	questionSet      *database.QuestionSet
 	currentQuestion  int
 	grading          bool // true while waiting for sandbox result
 	showOutput       bool // true after grading completes, before next question
@@ -99,13 +96,15 @@ type questionModel struct {
 	popup            bool
 }
 
-func initialQuestionModel(user *User) questionModel {
-	session, err := InitializeSession(user)
+func initialQuestionModel(user *database.User) questionModel {
+	client := &database.LocalClient{DnsURI: "linux.db"}
+	//client := &database.SupabaseClient{}
+	session, err := client.InitializeSession(user)
 	if err != nil {
 		log.Fatalf("Failed to initialize session: %v", err)
 	}
-	questionSet := session.questionSet
-	if len(questionSet.questions) == 0 {
+	questionSet := session.QuestionSet
+	if len(questionSet.Questions) == 0 {
 		log.Fatal("Failed to fetch questions!")
 	}
 
@@ -131,6 +130,7 @@ func initialQuestionModel(user *User) questionModel {
 		questionSet:      questionSet,
 		currentQuestion:  0,
 		session:          session,
+		client:           client,
 	}
 }
 
@@ -142,7 +142,7 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
-	numQuestions := len(m.questionSet.questions)
+	numQuestions := len(m.questionSet.Questions)
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -169,7 +169,7 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.currentQuestion == -1 {
 			if m.session != nil {
-				m.session.SaveSession()
+				m.client.SaveSession(m.session)
 			}
 			return m, tea.Quit
 
@@ -181,13 +181,13 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textarea.Blur()
 				}
 			case tea.KeyCtrlE:
-				q := m.session.questionSet.questions[m.currentQuestion]
+				q := m.session.QuestionSet.Questions[m.currentQuestion]
 
 				if m.grading {
 					return m, nil
 				}
 				// block re-runs for oneShot
-				if q.oneShot && q.attempted {
+				if q.OneShot && q.Attempted {
 					m.lastOutput = "This question allows only one attempt."
 					m.lastPass = false
 					m.showOutput = true
@@ -199,19 +199,20 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				//m.grading = true
 
 				// record the answer and kick off async grading
-				q.answer = strings.TrimSpace(m.textarea.Value())
-				if q.answer != "" {
-					q.attempted = true
+				q.Answer = strings.TrimSpace(m.textarea.Value())
+				if q.Answer != "" {
+					q.Attempted = true
 					m.grading = true
 
-					cmds = append(cmds, gradeAnswer(m.session, m.currentQuestion))
+					cmds = append(cmds, gradeAnswer(m.client, m.session, m.currentQuestion))
+
 					cmds = append(cmds, m.spinner.Tick)
 					return m, tea.Batch(cmds...)
 				}
 
 			case tea.KeyCtrlRight:
 				if !m.lastPass {
-					cmds = append(cmds, gradeAnswer(m.session, m.currentQuestion))
+					cmds = append(cmds, gradeAnswer(m.client, m.session, m.currentQuestion))
 				}
 				m.currentQuestion = (m.currentQuestion + 1) % numQuestions
 				m.lastOutput = ""
@@ -222,7 +223,7 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyCtrlLeft:
 				if !m.lastPass {
-					cmds = append(cmds, gradeAnswer(m.session, m.currentQuestion))
+					cmds = append(cmds, gradeAnswer(m.client, m.session, m.currentQuestion))
 				}
 				m.currentQuestion = (m.currentQuestion - 1 + numQuestions) % numQuestions
 				m.lastOutput = ""
@@ -236,7 +237,7 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.popup = true
 			case tea.KeyEnter:
 				if m.popup {
-					m.session.SaveSession()
+					m.client.SaveSession(m.session)
 					m.currentQuestion = -1
 				}
 
@@ -302,7 +303,7 @@ func (m questionModel) View() string {
 			boldStyle.Render("Great job!"),
 			"",
 			"You're all done!",
-			//fmt.Sprintf("Final Result: %s", boldStyle.Render(m.session.result)),
+			//fmt.Sprintf("Final Result: %s", boldStyle.Render(m.session.Result)),
 			"",
 			//m.progress.View(),
 			"",
@@ -312,13 +313,13 @@ func (m questionModel) View() string {
 	}
 
 	// question screen
-	q := m.questionSet.questions[m.currentQuestion]
+	q := m.questionSet.Questions[m.currentQuestion]
 
-	m.questionViewport.SetContent(questionStyle.Render(q.text))
+	m.questionViewport.SetContent(questionStyle.Render(q.Text))
 
 	// Format Title like: "Topic Name ### x"
 	attemptTag := ""
-	if m.session.questionSet.questions[m.currentQuestion].oneShot {
+	if m.session.QuestionSet.Questions[m.currentQuestion].OneShot {
 		attemptTag = " x"
 	}
 	titleStr := fmt.Sprintf("Question %d: %s", m.currentQuestion+1, attemptTag)
@@ -378,7 +379,7 @@ type infoModel struct {
 	focused  int
 	progress progress.Model
 	done     bool
-	user     *User
+	user     *database.User
 }
 
 func InitialInfoModel() infoModel {
@@ -406,7 +407,7 @@ func InitialInfoModel() infoModel {
 		inputs:   inputs,
 		focused:  0,
 		progress: p,
-		user:     &User{},
+		user:     &database.User{},
 	}
 }
 
@@ -465,11 +466,11 @@ func (m *infoModel) updateInputs(msg tea.Msg) tea.Cmd {
 }
 
 func (m *infoModel) confirmUserInfo() {
-	m.user.name = m.inputs[0].Value()
-	m.user.email = m.inputs[1].Value()
-	m.user.phone = m.inputs[2].Value()
-	m.user.year, _ = strconv.Atoi(m.inputs[3].Value())
-	m.user.oscian = m.inputs[4].Value() == "y" || m.inputs[4].Value() == "yes"
+	m.user.Name = m.inputs[0].Value()
+	m.user.Email = m.inputs[1].Value()
+	m.user.Phone = m.inputs[2].Value()
+	m.user.Year, _ = strconv.Atoi(m.inputs[3].Value())
+	m.user.Oscian = m.inputs[4].Value() == "y" || m.inputs[4].Value() == "yes"
 }
 
 func (m infoModel) View() string {
@@ -477,7 +478,7 @@ func (m infoModel) View() string {
 		return containerStyle.Render(fmt.Sprintf(
 			"%s\n\nProfile Created for %s!",
 			boldStyle.Render(""),
-			m.user.name,
+			m.user.Name,
 		))
 	}
 
@@ -503,15 +504,16 @@ func StartTUI() error {
 	return err
 }
 
-func gradeAnswer(session *Session, index int) tea.Cmd {
+func gradeAnswer(client database.Client, session *database.Session, index int) tea.Cmd {
 	return func() tea.Msg {
-		q := session.questionSet.questions[index]
-		output, err := q.gradeWithSandbox(session.sandbox)
-		session.SubmitQuestion(index)
+		q := session.QuestionSet.Questions[index]
+		client.SubmitQuestion(session, index)
+
+		output, err := q.GradeWithSandbox(session.Sandbox)
 		return gradingDoneMsg{
 			index:  index,
 			output: output,
-			pass:   q.score == 1,
+			pass:   q.Score == 1,
 			err:    err,
 		}
 	}
