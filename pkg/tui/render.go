@@ -97,8 +97,8 @@ type questionModel struct {
 }
 
 func initialQuestionModel(user *database.User) questionModel {
-	client := &database.LocalClient{DnsURI: "linux.db"}
-	//client := &database.SupabaseClient{}
+	//client := &database.LocalClient{DnsURI: "linux.db"}
+	client := &database.SupabaseClient{}
 	session, err := client.InitializeSession(user)
 	if err != nil {
 		log.Fatalf("Failed to initialize session: %v", err)
