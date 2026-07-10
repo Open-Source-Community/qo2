@@ -181,21 +181,6 @@ func (client *LocalClient) SubmitQuestion(session *Session, currentQuestion int)
 	}
 	defer submissionStmt.Close()
 	_, err = submissionStmt.Exec(session.ID, q.ID, q.Answer, q.Score, q.Result)
-	if err != nil {
-		return err
-	}
-
-	// Incremental update for session score ensure sessions table always has latest progress
-	session.Score += q.Score
-	session.Result = fmt.Sprintf("%d/%d", session.Score, len(session.QuestionSet.Questions))
-
-	updateStmt, err := client.db.Prepare(`UPDATE sessions SET score = ?, result = ? WHERE session_id = ?;`)
-	if err != nil {
-		return err
-	}
-	defer updateStmt.Close()
-
-	_, err = updateStmt.Exec(session.Score, session.Result, session.ID)
 	return err
 }
 

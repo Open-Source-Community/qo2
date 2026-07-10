@@ -507,9 +507,9 @@ func StartTUI() error {
 func gradeAnswer(client database.Client, session *database.Session, index int) tea.Cmd {
 	return func() tea.Msg {
 		q := session.QuestionSet.Questions[index]
-		client.SubmitQuestion(session, index)
 
 		output, err := q.GradeWithSandbox(session.Sandbox)
+		client.SubmitQuestion(session, index)
 		return gradingDoneMsg{
 			index:  index,
 			output: output,
