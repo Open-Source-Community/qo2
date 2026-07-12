@@ -82,10 +82,9 @@ def export_markdown(db_path: str = "linux.db", output_dir: str = "exports"):
                         s.answer   AS user_answer,
                         s.score    AS points,
                         s.result   AS status,
-                        q.text     AS question_text,
-                        q.topic,
-                        q.difficulty,
-                        q.model_answer
+                        q.Text     AS question_text,
+                        q.Topic,
+                        q.Difficulty,
                     FROM submissions s
                     JOIN questions q ON s.question_id = q.question_id
                     WHERE s.session_id = ?
@@ -120,7 +119,6 @@ def export_markdown(db_path: str = "linux.db", output_dir: str = "exports"):
                             f"|---|---|",
                             f"| **Difficulty** | {diff_label} |",
                             f"| **User Answer** | `{sub['user_answer'] or '—'}` |",
-                            f"| **Model Answer** | `{sub['model_answer'] or '—'}` |",
                             f"| **Result** | {icon} `{raw_status}` |",
                             f"| **Points** | `{points}` |",
                             f"",

@@ -27,7 +27,7 @@ def export_data(db_path, output_dir):
         for user in users:
             user_id = user['user_id']
             user_name = user['name'].replace(" ", "_")
-            
+
             user_data = {
                 "user_profile": dict(user),
                 "history": []
@@ -43,21 +43,23 @@ def export_data(db_path, output_dir):
                 session_dict['submissions'] = []
 
                 # Get all submissions for this session, joining with questions to get text
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT 
                         s.submission_id,
                         s.answer as user_answer,
                         s.score as points,
                         s.result as status,
-                        q.text as question_text,
-                        q.topic,
-                        q.difficulty,
-                        q.model_answer
+                        q.Text as question_text,
+                        q.Topic,
+                        q.Difficulty,
                     FROM submissions s
                     JOIN questions q ON s.question_id = q.question_id
                     WHERE s.session_id = ?
-                """, (session_id,))
-                
+                """,
+                    (session_id,),
+                )
+
                 submissions = cursor.fetchall()
                 for sub in submissions:
                     session_dict['submissions'].append(dict(sub))
@@ -67,10 +69,10 @@ def export_data(db_path, output_dir):
             # Save to JSON file
             filename = f"user_{user_id}_{user_name}.json"
             filepath = os.path.join(output_dir, filename)
-            
+
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(user_data, f, indent=4, ensure_ascii=False)
-            
+
             print(f"Exported data for user '{user['name']}' to {filepath}")
 
         conn.close()
