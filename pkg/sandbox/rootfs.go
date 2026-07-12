@@ -180,8 +180,80 @@ func ExtractRootfs() error {
 
 	os.MkdirAll(filepath.Join(Rootfs, "tmp"), 0777)
 	os.Chmod(filepath.Join(Rootfs, "tmp"), 01777)
-	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0755)
+	os.MkdirAll(filepath.Join(Rootfs, "home/ahmed"), 0777)
+	os.Chmod(filepath.Join(Rootfs, "home/ahmed"), 01777)
+	os.MkdirAll(filepath.Join(Rootfs, "root"), 0700)
+	os.MkdirAll(filepath.Join(Rootfs, "etc"), 0755)
 	os.MkdirAll(filepath.Join(Rootfs, "bin"), 0755)
+	os.MkdirAll(filepath.Join(Rootfs, "var/mail"), 0777)
+	os.MkdirAll(filepath.Join(Rootfs, "var/spool/mail"), 0777)
+	os.Chmod(filepath.Join(Rootfs, "var/mail"), 01777)
+	os.Chmod(filepath.Join(Rootfs, "var/spool/mail"), 01777)
+
+	// Copy host assets to sandbox home if the assets directory exists
+	assetsDir := "assets"
+	if pathExists(assetsDir) {
+		files, err := os.ReadDir(assetsDir)
+		if err == nil {
+			for _, f := range files {
+				if !f.IsDir() {
+					srcPath := filepath.Join(assetsDir, f.Name())
+					dstPath := filepath.Join(Rootfs, "home/ahmed", f.Name())
+					
+					src, err := os.Open(srcPath)
+					if err != nil {
+						continue
+					}
+					
+					dst, err := os.Create(dstPath)
+					if err != nil {
+						src.Close()
+						continue
+					}
+					
+					io.Copy(dst, src)
+					src.Close()
+					dst.Close()
+					
+					// ensure the file is readable by the sandbox user
+					os.Chmod(dstPath, 0644)
+					// chown to ahmed (uid=1000, gid=1000) so the sandbox user can modify it
+					os.Chown(dstPath, 1000, 1000)
+				}
+			}
+		}
+	}
+
+	// Create a mock sudo script
+	sudoPath := filepath.Join(Rootfs, "bin/sudo")
+	os.WriteFile(sudoPath, []byte("#!/bin/sh\nexec \"$@\"\n"), 0755)
+
+	// Ensure /lib, /lib64, /usr/lib64 all point to /usr/lib so that
+	// provisioned libraries from any distro layout are found correctly.
+	ensureLibSymlinks()
+
+	// Provision required tools if they exist on the host
+	tools := []string{
+		"bash", "ls", "cat", "grep", "git", "useradd", "userdel", "groupadd", "groupdel",
+		"passwd", "usermod", "id", "groups", "zip", "gzip", "bzip2", "tar", "find",
+		"tail", "head", "stat", "df", "du", "free", "chmod", "chown", "wc", "tee",
+		"sed", "touch", "rm", "mkdir", "zcat", "cp", "mv", "cut", "sort", "uniq",
+		"whoami", "pwd",
+	}
+	for _, tool := range tools {
+		_ = provisionTool(tool)
+	}
+
+	// Ensure /bin/sh points to our new bash provisioned from the host
+	shPath := filepath.Join(Rootfs, "bin/sh")
+	os.Remove(shPath)
+	os.Symlink("bash", shPath)
+
+	// Setup default git identity
+	_ = setupGitConfig()
+
+	// Ensure standard system groups exist for tools like useradd
+	_ = setupStandardGroups()
 
 	return nil
 }
@@ -189,6 +261,7 @@ func ExtractRootfs() error {
 // Sandbox init
 
 func StartSandBox() error {
+	fmt.Fprintf(os.Stderr, "[DEBUG] Sandbox starting. UID: %d, USER: %s\n", os.Getuid(), os.Getenv("SANDBOX_USER"))
 	syscall.Sethostname([]byte("sandbox"))
 
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
@@ -212,8 +285,21 @@ func StartSandBox() error {
 	os.MkdirAll("/proc", 0755)
 	syscall.Mount("proc", "/proc", "proc", 0, "")
 
-	if err := dropToUser(defaultUser); err != nil {
-		return err
+	// drop to user unless root is requested
+	sandboxUser := os.Getenv("SANDBOX_USER")
+	if sandboxUser == "" {
+		sandboxUser = defaultUser
+	}
+
+	if sandboxUser != "root" {
+		if err := dropToUser(sandboxUser); err != nil {
+			return err
+		}
+	} else {
+		// Explicitly set root environment for Admin Mode
+		os.Setenv("HOME", "/root")
+		os.Setenv("USER", "root")
+		os.Setenv("LOGNAME", "root")
 	}
 
 	switch os.Getenv("SANDBOX_MODE") {
@@ -254,6 +340,15 @@ func runSessionLoop() error {
 			break
 		}
 
+		if strings.HasPrefix(cmdStr, "man ") {
+			topic := strings.TrimPrefix(cmdStr, "man ")
+			cmdStr = fmt.Sprintf(
+				"f=$(find /usr/share/man -name '%s.*' 2>/dev/null | head -1); "+
+					"[ -z \"$f\" ] && echo 'No man page for %s' && exit; "+
+					"case \"$f\" in *.gz) zcat \"$f\";; *) cat \"$f\";; esac | sed 's/.\x08//g'",
+				topic, topic,
+			)
+		}
 		// persistent cd handling
 		if strings.HasPrefix(cmdStr, "cd ") && !strings.Contains(cmdStr, "\n") {
 			path := strings.TrimSpace(strings.TrimPrefix(cmdStr, "cd "))
@@ -280,11 +375,16 @@ func runSessionLoop() error {
 		cmd := exec.Command("/bin/sh", "-c", cmdStr)
 		cmd.Dir = cwd
 		cmd.Env = []string{
-			"PATH=/bin:/usr/bin",
-			"HOME=/home/ahmed",
-			"USER=ahmed",
-			"LOGNAME=ahmed",
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"HOME=" + os.Getenv("HOME"),
+			"USER=" + os.Getenv("USER"),
+			"LOGNAME=" + os.Getenv("LOGNAME"),
 			"TERM=xterm",
+			"MANPATH=/usr/share/man:/usr/local/share/man",
+			"PAGER=less",
+			"MANPAGER=less",
+			// Ensure dynamic linker finds libs regardless of distro layout
+			"LD_LIBRARY_PATH=/usr/lib:/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu",
 		}
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -352,5 +452,207 @@ func dropToUser(username string) error {
 	os.Setenv("HOME", homeDir)
 	os.Setenv("USER", username)
 	os.Setenv("LOGNAME", username)
+	return nil
+}
+func setupGitConfig() error {
+	config := "[user]\n\tname = OSC Recruit\n\temail = recruit@osc.org\n[init]\n\tdefaultBranch = master\n"
+	return os.WriteFile(filepath.Join(Rootfs, "home/ahmed/.gitconfig"), []byte(config), 0644)
+}
+
+func provisionTool(name string) error {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return err
+	}
+
+	// Determine destination (keep it standard in /bin)
+	dst := filepath.Join(Rootfs, "bin", name)
+	os.Remove(dst)
+	if err := copyFile(path, dst); err != nil {
+		return err
+	}
+
+	// Find all shared library dependencies using ldd
+	out, err := exec.Command("ldd", path).Output()
+	if err != nil {
+		return err
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		var libSrc string
+
+		if strings.Contains(line, "=>") {
+			// Standard lib line: "libfoo.so.X => /real/path/libfoo.so.X (0x...)"
+			parts := strings.Fields(line)
+			if len(parts) >= 3 && strings.HasPrefix(parts[2], "/") {
+				libSrc = parts[2]
+			}
+		} else if strings.HasPrefix(line, "/") {
+			// Dynamic linker: "/lib64/ld-linux-x86-64.so.2 (0x...)"
+			parts := strings.Fields(line)
+			if len(parts) >= 1 {
+				libSrc = parts[0]
+			}
+		}
+
+		if libSrc == "" {
+			continue
+		}
+
+		// Provision the library preserving host paths (cross-distro compatible)
+		_ = provisionLib(libSrc)
+	}
+	return nil
+}
+
+// provisionLib copies a host library into the sandbox at its exact host path.
+// This is cross-distro compatible: it preserves paths like
+//   - /usr/lib/libc.so.6            (Arch/Fedora)
+//   - /lib/x86_64-linux-gnu/libc.so.6 (Ubuntu/Debian)
+//
+// Additionally, every library is ALSO copied into rootfs/usr/lib/<basename>
+// as a universal fallback, so the dynamic linker can always find it even
+// without a valid ld.so.cache (which may be stale or missing in the sandbox).
+func provisionLib(hostPath string) error {
+	// Resolve any symlinks on the HOST to get to the real file
+	realPath, err := filepath.EvalSymlinks(hostPath)
+	if err != nil {
+		realPath = hostPath
+	}
+
+	// Copy the real file into the sandbox at its exact path.
+	// os.MkdirAll/file ops follow sandbox symlinks (e.g. /lib -> usr/lib)
+	sandboxDst := filepath.Join(Rootfs, realPath)
+	if err := os.MkdirAll(filepath.Dir(sandboxDst), 0755); err != nil {
+		return err
+	}
+	if err := copyFile(realPath, sandboxDst); err != nil {
+		return err
+	}
+
+	// If the original hostPath was a symlink, recreate that symlink in the sandbox
+	// so that both the original name and real name resolve correctly.
+	if realPath != hostPath {
+		sandboxLink := filepath.Join(Rootfs, hostPath)
+		os.MkdirAll(filepath.Dir(sandboxLink), 0755)
+		if _, err := os.Lstat(sandboxLink); os.IsNotExist(err) {
+			// Use relative symlink target if in the same directory
+			target := realPath
+			if filepath.Dir(hostPath) == filepath.Dir(realPath) {
+				target = filepath.Base(realPath)
+			}
+			_ = os.Symlink(target, sandboxLink)
+		}
+	}
+
+	// Belt-and-suspenders: ALSO copy to flat /usr/lib/<basename>.
+	// This ensures discoverability on ALL distros regardless of ld.so.cache
+	// or multiarch subdirectory layout (e.g. Ubuntu's x86_64-linux-gnu/).
+	flatDst := filepath.Join(Rootfs, "usr/lib", filepath.Base(realPath))
+	if flatDst != sandboxDst {
+		_ = copyFile(realPath, flatDst)
+	}
+	// Also symlink with original basename if different
+	origBase := filepath.Base(hostPath)
+	if origBase != filepath.Base(realPath) {
+		origFlat := filepath.Join(Rootfs, "usr/lib", origBase)
+		if _, err := os.Lstat(origFlat); os.IsNotExist(err) {
+			_ = os.Symlink(filepath.Base(realPath), origFlat)
+		}
+	}
+
+	return nil
+}
+
+// ensureLibSymlinks guarantees that /lib, /lib64, /usr/lib64, and /usr/bin
+// inside the sandbox all resolve correctly, regardless of host distro layout.
+// - Arch/Fedora: /usr/lib contains everything; /lib64 & /lib are already symlinks.
+// - Ubuntu/Debian: libraries live under /lib/x86_64-linux-gnu/ which the os
+//   functions redirect through the /lib -> usr/lib symlink we ensure here.
+func ensureLibSymlinks() {
+	usrLib := filepath.Join(Rootfs, "usr/lib")
+	os.MkdirAll(usrLib, 0755)
+
+	// /lib -> usr/lib
+	libPath := filepath.Join(Rootfs, "lib")
+	if fi, err := os.Lstat(libPath); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(libPath)
+		os.Symlink("usr/lib", libPath)
+	}
+
+	// /lib64 -> usr/lib
+	lib64Path := filepath.Join(Rootfs, "lib64")
+	if fi, err := os.Lstat(lib64Path); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(lib64Path)
+		os.Symlink("usr/lib", lib64Path)
+	}
+
+	// /usr/lib64 -> lib (so /usr/lib64 -> usr/lib too)
+	usrLib64 := filepath.Join(Rootfs, "usr/lib64")
+	if fi, err := os.Lstat(usrLib64); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(usrLib64)
+		os.Symlink("lib", usrLib64)
+	}
+
+	// /usr/bin -> /bin so provisioned tools in /bin are found via /usr/bin PATH
+	usrBin := filepath.Join(Rootfs, "usr/bin")
+	if fi, err := os.Lstat(usrBin); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		os.RemoveAll(usrBin)
+		os.Symlink("../bin", usrBin)
+	}
+}
+
+func setupStandardGroups() error {
+	groups := []string{
+		"bin:x:1:",
+		"daemon:x:2:",
+		"sys:x:3:",
+		"adm:x:4:",
+		"tty:x:5:",
+		"disk:x:6:",
+		"lp:x:7:",
+		"mail:x:8:",
+		"kmem:x:9:",
+		"wheel:x:10:",
+		"utmp:x:22:",
+		"staff:x:50:",
+	}
+
+	groupPath := filepath.Join(Rootfs, "etc/group")
+	f, err := os.OpenFile(groupPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, g := range groups {
+		f.WriteString(g + "\n")
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+
+	si, err := os.Stat(src)
+	if err == nil {
+		os.Chmod(dst, si.Mode())
+	}
+
 	return nil
 }

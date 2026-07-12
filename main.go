@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/ahmedYasserM/qo/cmd"
@@ -13,7 +14,7 @@ import (
 func main() {
 
 	if len(os.Args) > 1 && os.Args[1] == "init" {
-		if err := sandbox.StartSandBox(); err != nil {
+		if err := sandbox.StartSandBox(); err != nil && err != io.EOF {
 			fmt.Fprintf(os.Stderr, "sandbox init error: %v\n", err)
 			os.Exit(1)
 		}

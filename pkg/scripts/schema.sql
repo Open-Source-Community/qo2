@@ -39,6 +39,7 @@ CREATE TABLE submissions (
     question_id INTEGER,
     answer TEXT,
     score INTEGER,
+    result text,
     FOREIGN KEY (session_id) REFERENCES sessions (session_id),
     FOREIGN KEY (question_id) REFERENCES questions (question_id)
 );

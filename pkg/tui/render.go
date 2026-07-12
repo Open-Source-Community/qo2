@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	overlay "github.com/floatpane/bubble-overlay"
 )
 
 // constants & styles
@@ -21,12 +22,12 @@ const (
 	maxWidth            = 60
 	hexBlue      string = "68b0f4"
 	hexLightBlue string = "bddfff"
-	hexGreen     string = "6ef2a0"
+	hexGreen     string = "77dd77"
 	hexRed       string = "f26e6e"
 )
 
 var (
-	containerStyle = lipgloss.NewStyle().Margin(2)
+	containerStyle = lipgloss.NewStyle().Margin(2).Align(lipgloss.Center)
 	boldStyle      = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#" + hexBlue)).
 			Bold(true)
@@ -40,7 +41,8 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#"+hexLightBlue)).
 			Padding(1, 2).
-			MarginTop(1)
+			MarginTop(1).
+			Align(lipgloss.Center)
 	outputPassStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#"+hexGreen)).
 			Border(lipgloss.RoundedBorder()).
@@ -53,12 +55,20 @@ var (
 			BorderForeground(lipgloss.Color("#"+hexRed)).
 			Width(maxWidth).
 			Padding(0, 1)
+	popupStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#"+hexBlue)).
+			Foreground(lipgloss.Color("#"+hexLightBlue)).
+			Border(lipgloss.RoundedBorder()).
+			Padding(1, 3)
+
+	windowHeight = 0
+	windowWidth  = 0
 )
 
 type QuestionSet struct {
 	title        string
 	instructions string
-	questions    []Question
+	questions    []*Question
 }
 
 // tea messages
@@ -86,6 +96,7 @@ type questionModel struct {
 	showOutput       bool // true after grading completes, before next question
 	lastOutput       string
 	lastPass         bool
+	popup            bool
 }
 
 func initialQuestionModel(user *User) questionModel {
@@ -93,7 +104,7 @@ func initialQuestionModel(user *User) questionModel {
 	if err != nil {
 		log.Fatalf("Failed to initialize session: %v", err)
 	}
-	questionSet := session.questionsSet
+	questionSet := session.questionSet
 	if len(questionSet.questions) == 0 {
 		log.Fatal("Failed to fetch questions!")
 	}
@@ -131,13 +142,18 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
+	numQuestions := len(m.questionSet.questions)
+
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		windowHeight = msg.Height
+		windowWidth = msg.Width
 
 	case gradingDoneMsg:
 		m.grading = false
 		m.showOutput = true
 		if msg.err != nil {
-			m.lastOutput = fmt.Sprintf("grading error: %v", msg.err)
+			m.lastOutput = msg.output + "\n" + msg.err.Error()
 			m.lastPass = false
 		} else {
 			m.lastOutput = msg.output
@@ -146,81 +162,106 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputViewport.SetContent(m.lastOutput)
 
 		// advance progress bar
-		cmd = m.progress.IncrPercent(float64(1) / float64(len(m.questionSet.questions)))
+		cmd = m.progress.IncrPercent(float64(1) / float64(numQuestions))
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC:
+		if m.currentQuestion == -1 {
+			if m.session != nil {
+				m.session.SaveSession()
+			}
 			return m, tea.Quit
 
-		case tea.KeyEsc:
-			if m.textarea.Focused() {
-				m.textarea.Blur()
-			}
-		case tea.KeyCtrlE:
-			if m.grading {
-				return m, nil
-			}
+		} else {
+			switch msg.Type {
 
-			q := &m.questionSet.questions[m.currentQuestion]
-
-			// block re-runs for oneShot
-			if q.oneShot && q.attempted {
-				m.lastOutput = "This question allows only one attempt."
-				m.lastPass = false
-				m.showOutput = true
-				m.outputViewport.SetContent(m.lastOutput)
-				return m, nil
-			}
-			m.grading = true
-			m.showOutput = false
-			m.textarea.Blur()
-
-			q.answer = m.textarea.Value()
-			q.attempted = true
-			//m.grading = true
-
-			// record the answer and kick off async grading
-			m.questionSet.questions[m.currentQuestion].answer = m.textarea.Value()
-			m.grading = true
-
-			cmds = append(cmds, runCommandAsync(m.session, m.currentQuestion))
-			cmds = append(cmds, m.spinner.Tick)
-			return m, tea.Batch(cmds...)
-
-		case tea.KeyCtrlS:
-			// only allow advancing if output is shown
-			if !m.showOutput {
-				return m, nil
-			}
-
-			m.showOutput = false
-
-			if m.currentQuestion < len(m.questionSet.questions)-1 {
-				m.currentQuestion++
-				m.textarea.Reset()
-			} else {
-				m.currentQuestion = -1
-				if err := m.session.SaveSession(); err != nil {
-					log.Printf("SaveSession error: %v", err)
+			case tea.KeyEsc:
+				if m.textarea.Focused() {
+					m.textarea.Blur()
 				}
-			}
+			case tea.KeyCtrlE:
+				q := m.session.questionSet.questions[m.currentQuestion]
 
-			return m, nil
-		default:
-			// if output is shown and user presses anything -> go back to editing
-			if m.showOutput && !m.grading {
+				if m.grading {
+					return m, nil
+				}
+				// block re-runs for oneShot
+				if q.oneShot && q.attempted {
+					m.lastOutput = "This question allows only one attempt."
+					m.lastPass = false
+					m.showOutput = true
+					m.outputViewport.SetContent(m.lastOutput)
+					return m, nil
+				}
 				m.showOutput = false
-				cmd = m.textarea.Focus()
-				cmds = append(cmds, cmd)
-				return m, tea.Batch(cmds...)
-			}
+				m.textarea.Blur()
+				//m.grading = true
 
-			if !m.textarea.Focused() && !m.grading {
-				cmd = m.textarea.Focus()
-				cmds = append(cmds, cmd)
+				// record the answer and kick off async grading
+				q.answer = strings.TrimSpace(m.textarea.Value())
+				if q.answer != "" {
+					q.attempted = true
+					m.grading = true
+
+					cmds = append(cmds, gradeAnswer(m.session, m.currentQuestion))
+					cmds = append(cmds, m.spinner.Tick)
+					return m, tea.Batch(cmds...)
+				}
+
+			case tea.KeyCtrlRight:
+				if !m.lastPass {
+					cmds = append(cmds, gradeAnswer(m.session, m.currentQuestion))
+				}
+				m.currentQuestion = (m.currentQuestion + 1) % numQuestions
+				m.lastOutput = ""
+				m.lastPass = false
+				m.grading = false
+				m.showOutput = false
+				m.textarea.Reset()
+				return m, nil
+			case tea.KeyCtrlLeft:
+				if !m.lastPass {
+					cmds = append(cmds, gradeAnswer(m.session, m.currentQuestion))
+				}
+				m.currentQuestion = (m.currentQuestion - 1 + numQuestions) % numQuestions
+				m.lastOutput = ""
+				m.lastPass = false
+				m.grading = false
+				m.showOutput = false
+				m.textarea.Reset()
+				return m, nil
+
+			case tea.KeyCtrlS, tea.KeyCtrlC:
+				m.popup = true
+			case tea.KeyEnter:
+				if m.popup {
+					m.session.SaveSession()
+					m.currentQuestion = -1
+				}
+
+			default:
+				//if user presses any key other than enter -> go back and don't submit
+				if m.popup {
+					m.popup = false
+				}
+				// if output is shown and user presses anything -> go back to editing
+				if m.showOutput && !m.grading {
+					switch msg.String() {
+					case "up", "down":
+						// let these slip to allow scrolling!!!
+					default:
+						m.showOutput = false
+						cmd = m.textarea.Focus()
+						cmds = append(cmds, cmd)
+						return m, tea.Batch(cmds...)
+					}
+				}
+
+				if !m.textarea.Focused() && !m.grading {
+					cmd = m.textarea.Focus()
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 
@@ -252,6 +293,9 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m questionModel) View() string {
+	if windowHeight == 0 { // wait for WindowSizeMsg to reach
+		return "Initializing..."
+	}
 	// finished screen
 	if m.currentQuestion == -1 {
 		content := lipgloss.JoinVertical(lipgloss.Center,
@@ -262,22 +306,26 @@ func (m questionModel) View() string {
 			"",
 			//m.progress.View(),
 			"",
-			subtleStyle.Render("press ctrl+c to exit"),
+			subtleStyle.Render("Press any key to exit."),
 		)
 		return containerStyle.Render(cardStyle.Align(lipgloss.Center).Render(content))
 	}
 
 	// question screen
-	m.questionViewport.SetContent(questionStyle.Render(m.questionSet.questions[m.currentQuestion].text))
+	q := m.questionSet.questions[m.currentQuestion]
+
+	m.questionViewport.SetContent(questionStyle.Render(q.text))
+
+	// Format Title like: "Topic Name ### x"
+	attemptTag := ""
+	if m.session.questionSet.questions[m.currentQuestion].oneShot {
+		attemptTag = " x"
+	}
+	titleStr := fmt.Sprintf("Question %d: %s", m.currentQuestion+1, attemptTag)
 
 	parts := []string{
-		boldStyle.Render(m.questionSet.title),
+		boldStyle.Render(titleStr),
 		"",
-		subtleStyle.Render(fmt.Sprintf("topic: %s  •  difficulty: %d",
-
-			m.questionSet.questions[m.currentQuestion].topic,
-			m.questionSet.questions[m.currentQuestion].difficulty,
-		)),
 		m.questionViewport.View(),
 		"",
 	}
@@ -300,17 +348,10 @@ func (m questionModel) View() string {
 			label = "Output   "
 		}
 
-		displayOutput := strings.TrimSpace(m.lastOutput)
-		if displayOutput == "" {
-			displayOutput = "(no output)"
-		}
-		m.outputViewport.SetContent(displayOutput)
-
 		parts = append(parts,
 			subtleStyle.Render(label),
 			outputBox.Render(m.outputViewport.View()),
 			"",
-			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute • ctrl+c: quit"),
 		)
 	} else {
 		parts = append(parts,
@@ -319,11 +360,15 @@ func (m questionModel) View() string {
 			"",
 			//m.progress.View(),
 			"",
-			subtleStyle.Render("ctrl+s: next question • ctrl+e: execute • ctrl+c: quit"),
 		)
 	}
-
-	return containerStyle.Render(lipgloss.JoinVertical(lipgloss.Top, parts...))
+	popup := popupStyle.Render("Press <enter> to submit\nor any key to cancel")
+	base := containerStyle.Render(lipgloss.JoinVertical(lipgloss.Top, parts...))
+	if m.popup {
+		return overlay.Center(base, popup, windowWidth, windowHeight)
+	} else {
+		return base
+	}
 }
 
 // info form screen
@@ -371,6 +416,9 @@ func (m infoModel) Init() tea.Cmd {
 
 func (m infoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		windowHeight = msg.Height
+		windowWidth = msg.Width
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
@@ -454,25 +502,16 @@ func StartTUI() error {
 	_, err := p.Run()
 	return err
 }
-func runCommandAsync(session *Session, index int) tea.Cmd {
+
+func gradeAnswer(session *Session, index int) tea.Cmd {
 	return func() tea.Msg {
-		q := &session.questionsSet.questions[index]
-
-		if session.sandbox == nil {
-			return gradingDoneMsg{
-				index:  index,
-				output: "sandbox not initialized",
-				pass:   false,
-				err:    fmt.Errorf("no sandbox"),
-			}
-		}
-
-		output, err := session.sandbox.Run(q.answer)
-
+		q := session.questionSet.questions[index]
+		output, err := q.gradeWithSandbox(session.sandbox)
+		session.SubmitQuestion(index)
 		return gradingDoneMsg{
 			index:  index,
 			output: output,
-			pass:   err == nil,
+			pass:   q.score == 1,
 			err:    err,
 		}
 	}
