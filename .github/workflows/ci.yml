@@ -42,10 +42,13 @@ jobs:
           docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace ${{ matrix.distro }} /bin/bash -c "
             set -e
             if command -v apt-get >/dev/null; then
-              apt-get update && apt-get install -y golang sqlite3 git tar zip gzip bzip2
+              apt-get update && apt-get install -y sqlite3 git tar zip gzip bzip2 curl
             elif command -v dnf >/dev/null; then
-              dnf install -y golang sqlite git tar zip gzip bzip2
+              dnf install -y sqlite git tar zip gzip bzip2 curl
             fi
+            curl -fsSL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz | tar -C /usr/local -xz
+            export PATH=/usr/local/go/bin:\$PATH
+            go version
             go test -v ./pkg/...
             go build -o qo main.go
             ./qo --help
