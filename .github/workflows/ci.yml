@@ -2,9 +2,9 @@ name: QO2 Multi-Distro CI
 
 on:
   push:
-    branches: [ main, interview, master ]
+    branches: [ ctf-improvements ]
   pull_request:
-    branches: [ main, interview, master ]
+    branches: [ ctf-improvements ]
 
 jobs:
   unit-tests:
@@ -49,4 +49,5 @@ jobs:
             go test -v ./pkg/...
             go build -o qo main.go
             ./qo --help
+            bash scripts/test-e2e.sh
           "
