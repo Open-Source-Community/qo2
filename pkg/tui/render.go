@@ -152,12 +152,18 @@ func (m questionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gradingDoneMsg:
 		m.grading = false
 		m.showOutput = true
-		if msg.err != nil {
-			m.lastOutput = msg.output + "\n" + msg.err.Error()
+		if !msg.pass || msg.err != nil {
+			m.lastOutput = "Check failed. Try again!"
 			m.lastPass = false
 		} else {
-			m.lastOutput = msg.output
-			m.lastPass = msg.pass
+			m.lastPass = true
+			studentID := m.session.User.Name
+			if studentID == "" {
+				studentID = "student"
+			}
+			baseFlag := fmt.Sprintf("q%d_base_flag", m.questionSet.Questions[msg.index].ID)
+			flagVal := sandbox.GenerateUniqueFlag(baseFlag, studentID)
+			m.lastOutput = fmt.Sprintf("Passed!\nFlag: %s", flagVal)
 		}
 		m.outputViewport.SetContent(m.lastOutput)
 

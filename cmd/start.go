@@ -56,6 +56,14 @@ var startCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		var err error
+		id, err = strconv.ParseUint(idStr, 10, 64)
+		if err != nil {
+			logger.Error(fmt.Errorf("invalid student ID: %w", err))
+			os.Exit(1)
+		}
+		os.Setenv("QO_STUDENT_ID", idStr)
+
 		if err := sandbox.ExtractRootfs(); err != nil {
 			return err
 		}
@@ -66,7 +74,7 @@ var startCmd = &cobra.Command{
 
 		logger.Success(fmt.Sprintf("%s folder is unpacked and decrypted successfully.", archivePath))
 
-		err := sandbox.StartSandBox()
+		err = sandbox.StartSandBox()
 
 		return err
 	},
@@ -80,23 +88,14 @@ func init() {
 	startCmd.Flags().StringVarP(&archivePath, "archive", "a", "", "Path to the encrypted archive file (required)")
 	startCmd.Flags().StringVarP(&passwordStart, "password", "p", "", "Password used for encrypt the archive (required)")
 	startCmd.Flags().StringVarP(&utKeyStart, "key", "k", "", "Starter key used for decryption (required)")
-	startCmd.Flags().DurationVarP(&testDuration, "duration", "d", 0, "Total duration of the test (e.g., 90m, 1h30m) (required)")
+	startCmd.Flags().DurationVarP(&testDuration, "duration", "d", 0, "Total duration of the test (e.g., 90m, 1h30m) (optional)")
 	startCmd.Flags().StringVarP(&outputLogDir, "output", "o", "eval-results", "Output directory for logs and PDF reports")
 
 	startCmd.MarkFlagRequired("id")
 	startCmd.MarkFlagRequired("archive")
 	startCmd.MarkFlagRequired("password")
 	startCmd.MarkFlagRequired("key")
-	startCmd.MarkFlagRequired("duration")
 
 	rootCmd.SilenceUsage = true
 	rootCmd.SilenceErrors = true
-
-	// This is done to enable user to input id like `093` and parse it as decimal not octal
-	var err error
-	id, err = strconv.ParseUint(idStr, 10, 16)
-	if err != nil {
-		logger.Error(err)
-		os.Exit(1)
-	}
 }

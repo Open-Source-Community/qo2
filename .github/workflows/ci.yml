@@ -1,0 +1,52 @@
+name: QO2 Multi-Distro CI
+
+on:
+  push:
+    branches: [ main, interview, master ]
+  pull_request:
+    branches: [ main, interview, master ]
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run Go Unit Tests
+        run: go test -v ./pkg/...
+
+  multi-distro-matrix:
+    name: Multi-Distro Build & Integration Matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - debian:bookworm
+          - ubuntu:22.04
+          - fedora:39
+          - kalilinux/kali-rolling
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Run Distro Container Build & Test Verification
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace ${{ matrix.distro }} /bin/bash -c "
+            set -e
+            if command -v apt-get >/dev/null; then
+              apt-get update && apt-get install -y golang sqlite3 git tar zip gzip bzip2
+            elif command -v dnf >/dev/null; then
+              dnf install -y golang sqlite git tar zip gzip bzip2
+            fi
+            go test -v ./pkg/...
+            go build -o qo main.go
+            ./qo --help
+          "

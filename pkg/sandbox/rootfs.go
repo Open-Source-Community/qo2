@@ -25,8 +25,9 @@ const target = "/tmp"
 const sentinel = "\x00__QO_EOF__\x00"
 
 var (
-	Rootfs      = filepath.Join(target, "rootfs")
-	defaultUser = "ahmed"
+	Rootfs        = filepath.Join(target, "rootfs")
+	ChallengesDir = filepath.Join(target, "rootfs_challenges")
+	defaultUser   = "ahmed"
 )
 
 // Sandbox session
@@ -66,8 +67,7 @@ func NewSession() (*SandboxSession, error) {
 
 	// monitor crash
 	go func() {
-		err := cmd.Wait()
-		fmt.Fprintf(os.Stderr, "\n[SANDBOX EXITED]: %v\n", err)
+		_ = cmd.Wait()
 	}()
 
 	return &SandboxSession{
@@ -139,6 +139,10 @@ func ExtractRootfs() error {
 	if pathExists(Rootfs) {
 		_ = os.RemoveAll(Rootfs)
 	}
+	if pathExists(ChallengesDir) {
+		_ = os.RemoveAll(ChallengesDir)
+	}
+	_ = os.MkdirAll(ChallengesDir, 0700)
 
 	gzReader, err := gzip.NewReader(bytes.NewReader(embeddedRootfs))
 	if err != nil {
@@ -238,10 +242,15 @@ func ExtractRootfs() error {
 		"passwd", "usermod", "id", "groups", "zip", "gzip", "bzip2", "tar", "find",
 		"tail", "head", "stat", "df", "du", "free", "chmod", "chown", "wc", "tee",
 		"sed", "touch", "rm", "mkdir", "zcat", "cp", "mv", "cut", "sort", "uniq",
-		"whoami", "pwd",
+		"whoami", "pwd", "ping", "unzip", "pgrep", "pkill", "nano", "vim", "awk",
 	}
 	for _, tool := range tools {
 		_ = provisionTool(tool)
+	}
+
+	// Copy nano syntax files if available on host
+	if pathExists("/usr/share/nano") {
+		_ = copyDir("/usr/share/nano", filepath.Join(Rootfs, "usr/share/nano"))
 	}
 
 	// Ensure /bin/sh points to our new bash provisioned from the host
@@ -261,7 +270,6 @@ func ExtractRootfs() error {
 // Sandbox init
 
 func StartSandBox() error {
-	fmt.Fprintf(os.Stderr, "[DEBUG] Sandbox starting. UID: %d, USER: %s\n", os.Getuid(), os.Getenv("SANDBOX_USER"))
 	syscall.Sethostname([]byte("sandbox"))
 
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
@@ -655,4 +663,21 @@ func copyFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		return copyFile(path, target)
+	})
 }

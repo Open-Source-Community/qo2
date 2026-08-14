@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # setup.sh - Installation and build script for qo2
-# Supports: Arch Linux, Debian/Ubuntu, and Fedora
+# Supports: Arch Linux, Debian/Ubuntu, Fedora, Kali Linux, and Pop!_OS
 
 set -e
 
@@ -25,14 +25,14 @@ echo -e "${BLUE}[1/5] Installing dependencies...${NC}"
 
 if command -v pacman >/dev/null; then
     echo -e "Detected ${GREEN}Arch Linux${NC}"
-    sudo pacman -Sy --needed --noconfirm go sqlite git tar kitty zip gzip bzip2
-    elif command -v apt-get >/dev/null; then
-    echo -e "Detected ${GREEN}Debian/Ubuntu${NC}"
+    sudo pacman -Sy --needed --noconfirm go sqlite git tar zip gzip bzip2
+elif command -v apt-get >/dev/null; then
+    echo -e "Detected ${GREEN}Debian/Ubuntu/Kali/Pop!_OS${NC}"
     sudo apt-get update
-    sudo apt-get install -y golang sqlite3 git tar kitty zip gzip bzip2
-    elif command -v dnf >/dev/null; then
+    sudo apt-get install -y golang sqlite3 git tar zip gzip bzip2
+elif command -v dnf >/dev/null; then
     echo -e "Detected ${GREEN}Fedora${NC}"
-    sudo dnf install -y golang sqlite git tar kitty zip gzip bzip2
+    sudo dnf install -y golang sqlite git tar zip gzip bzip2
 else
     echo -e "${RED}Unsupported package manager. Please install 'go', 'sqlite3', 'git', 'gzip', and 'bzip2' manually.${NC}"
 fi

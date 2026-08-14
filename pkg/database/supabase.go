@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/ahmedYasserM/qo/pkg/logger"
 	"github.com/ahmedYasserM/qo/pkg/sandbox"
 	"github.com/google/uuid"
 	"github.com/supabase-community/gotrue-go/types"
@@ -16,9 +18,16 @@ import (
 const (
 	API_URL     string = "https://fzyrnorpiiahggrywtfk.supabase.co"
 	API_KEY     string = "sb_publishable_Jn6qoCASApvAjfhtqyIu0A_IMbOMqFt"
-	QONGIF_DIR  string = "~/.config/qo"
 	QONGIF_FILE string = "qonfig.json"
 )
+
+func getConfigDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".config", "qo")
+}
 
 type SupabaseClient struct {
 	sb           *supabase.Client
@@ -36,7 +45,8 @@ func (client *SupabaseClient) Initialize() error {
 		log.Fatalf("Failed to init client: %v", err)
 	}
 
-	sessionBytes, err := os.ReadFile(fmt.Sprintf("%s/%s", QONGIF_DIR, QONGIF_FILE))
+	configDir := getConfigDir()
+	sessionBytes, err := os.ReadFile(filepath.Join(configDir, QONGIF_FILE))
 	session := types.Session{}
 	if err == nil {
 		err = json.Unmarshal(sessionBytes, &session)
@@ -57,11 +67,11 @@ func (client *SupabaseClient) Initialize() error {
 			log.Fatalf("Failed to sign up: %v", err)
 		}
 		sessionBytes, _ := json.Marshal(resp.Session)
-		err = os.MkdirAll(QONGIF_DIR, 0o755)
+		err = os.MkdirAll(configDir, 0o755)
 		if err != nil {
 			log.Fatalf("Failed to create config dir: %v", err)
 		}
-		err = os.WriteFile(fmt.Sprintf("%s/%s", QONGIF_DIR, QONGIF_FILE), sessionBytes, 0o600)
+		err = os.WriteFile(filepath.Join(configDir, QONGIF_FILE), sessionBytes, 0o600)
 		if err != nil {
 			log.Fatalf("Failed to create config file: %v", err)
 
@@ -194,7 +204,10 @@ func (client *SupabaseClient) SubmitQuestion(session *Session, currentQuestion i
 		"session_id": session.ID, "question_id": q.ID,
 		"answer": q.Answer, "score": q.Score, "result": q.Result,
 	}, false, "", "minimal", "").Execute()
-	return err
+	if err != nil {
+		logger.Warn(fmt.Sprintf("Leaderboard submit failed (network fallback active): %v", err))
+	}
+	return nil
 }
 
 func (client *SupabaseClient) Close() {

@@ -157,14 +157,28 @@ func DecryptTarArchive(encryptedFile, password, utKey string) error {
 			continue
 		}
 
-		dest := filepath.Join(sandbox.Rootfs, "tmp", header.Name)
+		baseName := filepath.Base(header.Name)
+		isSecret := baseName == "check.sh" || baseName == "setup.sh" || baseName == "cleanup.sh" || baseName == "flag.txt" || baseName == ".base_flag"
+
+		var dest string
+		if isSecret {
+			dest = filepath.Join(sandbox.ChallengesDir, header.Name)
+		} else {
+			dest = filepath.Join(sandbox.Rootfs, "tmp", header.Name)
+		}
+
+		dirMode := os.FileMode(0755)
+		if isSecret {
+			dirMode = os.FileMode(0700)
+		}
+
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(dest, os.FileMode(header.Mode)); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(dest), dirMode); err != nil {
 				return err
 			}
 
