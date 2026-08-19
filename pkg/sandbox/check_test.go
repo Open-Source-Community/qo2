@@ -14,14 +14,16 @@ import (
 // tests run in isolated temp dirs without touching a live session.
 func setPaths(t *testing.T) (restore func()) {
 	t.Helper()
-	oldRoot, oldChal := Rootfs, ChallengesDir
+	oldRoot, oldChal, oldPristine := Rootfs, ChallengesDir, PristineDir
 	dir := t.TempDir()
 	Rootfs = filepath.Join(dir, "rootfs")
 	ChallengesDir = filepath.Join(dir, "challenges")
+	PristineDir = filepath.Join(dir, "pristine")
 	os.MkdirAll(Rootfs, 0755)
 	os.MkdirAll(ChallengesDir, 0700)
+	os.MkdirAll(PristineDir, 0700)
 	return func() {
-		Rootfs, ChallengesDir = oldRoot, oldChal
+		Rootfs, ChallengesDir, PristineDir = oldRoot, oldChal, oldPristine
 	}
 }
 
@@ -109,9 +111,10 @@ func TestWriteCheckStubsSecrecy(t *testing.T) {
 		t.Fatalf("expected 2 stubs, got %d", n)
 	}
 
-	// Stub exists, is executable, and contains no test logic or secrets.
+	// Stub exists in the pristine staging tree, is executable, and contains no
+	// test logic or secrets.
 	for _, lvl := range []string{"level1", "challenges/level2"} {
-		stub := filepath.Join(Rootfs, "tmp", lvl, "check.sh")
+		stub := filepath.Join(PristineDir, lvl, "check.sh")
 		b, err := os.ReadFile(stub)
 		if err != nil {
 			t.Fatalf("stub %s not written: %v", stub, err)
@@ -131,18 +134,20 @@ func TestWriteCheckStubsSecrecy(t *testing.T) {
 		}
 	}
 
-	// No secret file ever lands under the rootfs tree.
-	err = filepath.Walk(Rootfs, func(path string, info os.FileInfo, err error) error {
+	// No secret file ever lands under the rootfs tree or the pristine tree.
+	for _, base := range []string{Rootfs, PristineDir} {
+		err = filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && (info.Name() == ".base_flag" || info.Name() == "flag.txt" || info.Name() == "setup.sh" || info.Name() == "cleanup.sh") {
+				t.Errorf("secret file leaked into %s: %s", base, path)
+			}
+			return nil
+		})
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
-		if !info.IsDir() && (info.Name() == ".base_flag" || info.Name() == "flag.txt" || info.Name() == "setup.sh" || info.Name() == "cleanup.sh") {
-			t.Errorf("secret file leaked into rootfs: %s", path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -199,8 +204,9 @@ func TestCheckSocketRoundTrip(t *testing.T) {
 		[]byte("#!/bin/bash\nif [ -d \"$PWD/answer\" ]; then echo 'Level 1 passed!'; echo \"key=\\\"LVL-1-K7Q4X\\\"\"; exit 0; else echo 'Level 1 failed: missing answer dir'; exit 1; fi\n"), 0755)
 	os.WriteFile(filepath.Join(levelDir, ".base_flag"), []byte(baseFlag), 0600)
 
-	// Simulate the student's work inside the sandbox.
-	os.MkdirAll(filepath.Join(Rootfs, "tmp", "level1", "answer"), 0755)
+	// Simulate the student's work inside the sandbox (in their home, where
+	// qo-setup would have copied the level).
+	os.MkdirAll(filepath.Join(Rootfs, "home", "ahmed", "level1", "answer"), 0755)
 
 	// The sandbox child normally bind-mounts /dev/null before the shell starts;
 	// replicate it so the check child has a working /dev/null.
@@ -263,7 +269,7 @@ func runCheckRequest(t *testing.T, uid uint32) (string, string) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	req := fmt.Sprintf("check\tlevel1\t/tmp/level1\t%d\t%d\n", uid, uid)
+	req := fmt.Sprintf("check\tlevel1\t/home/ahmed/level1\t%d\t%d\n", uid, uid)
 	if _, err := conn.Write([]byte(req)); err != nil {
 		t.Fatal(err)
 	}

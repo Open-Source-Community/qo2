@@ -39,6 +39,12 @@ const (
 	checkClientName     = "qo-check"
 	checkStubName       = "check.sh"
 
+	// setupClientName / resetClientName are the on-demand commands installed
+	// inside the chroot. Both are the same static binary; main.go dispatches
+	// on argv[0].
+	setupClientName = "qo-setup"
+	resetClientName = "qo-reset"
+
 	// checkResponseOK / checkResponseFail / checkResponseError are the exit
 	// codes the server reports: 0 = level passed, 1 = level not yet solved,
 	// 2 = internal error (missing script, bad request, ...).
@@ -67,6 +73,9 @@ func checkSocketHostPath() string {
 // It must run in the privileged parent process before the sandbox child spawns.
 func StartCheckServer(studentID string) (net.Listener, error) {
 	sock := checkSocketHostPath()
+	if err := os.MkdirAll(filepath.Dir(sock), 0755); err != nil {
+		return nil, fmt.Errorf("creating socket dir: %w", err)
+	}
 	_ = os.Remove(sock)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -90,11 +99,30 @@ func StartCheckServer(studentID string) (net.Listener, error) {
 	return ln, nil
 }
 
-// handleCheckConn services a single stub request and closes the connection.
+// handleCheckConn services a single request and closes the connection. It
+// dispatches on the first tab-separated token: "check" runs a level check,
+// "setup"/"reset" copy a level's pristine files into the student's home.
 func handleCheckConn(conn net.Conn, studentID string) {
 	defer conn.Close()
 
-	req, err := readCheckRequest(conn)
+	br := bufio.NewReader(conn)
+	line, err := br.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(conn, "QOCHECK %d\nbad request: %v\n", checkResponseError, err)
+		return
+	}
+	verb := strings.SplitN(strings.TrimRight(line, "\n"), "\t", 2)[0]
+	switch verb {
+	case "setup", "reset":
+		handleSetupConn(conn, line, verb == "reset")
+	default:
+		handleCheckConnVerb(conn, line, studentID)
+	}
+}
+
+// handleCheckConnVerb is the original check path, fed the already-read line.
+func handleCheckConnVerb(conn net.Conn, line, studentID string) {
+	req, err := readCheckRequestLine(line)
 	if err != nil {
 		fmt.Fprintf(conn, "QOCHECK %d\nbad request: %v\n", checkResponseError, err)
 		return
@@ -107,10 +135,18 @@ func handleCheckConn(conn net.Conn, studentID string) {
 	}
 
 	if code == checkResponseOK && baseFlag != "" {
-		flag := GenerateUniqueFlag(baseFlag, studentID)
+		// Prefer the student ID carried in the request (read from QO_STUDENT_ID
+		// inside the chroot) over the one captured when the session server
+		// started. This keeps flags and leaderboard rows tied to the session
+		// the check actually ran in, even if a stale server process lingers.
+		reqID := studentID
+		if req.studentID != "" {
+			reqID = req.studentID
+		}
+		flag := GenerateUniqueFlag(baseFlag, reqID)
 		output = presentCheckSuccess(output, baseFlag, flag)
 		if LeaderboardHook != nil {
-			LeaderboardHook(studentID, req.levelKey, flag)
+			LeaderboardHook(reqID, req.levelKey, flag)
 		}
 	} else if code == checkResponseOK {
 		// No base flag found for this level: nothing secret to reveal, but the
@@ -123,22 +159,23 @@ func handleCheckConn(conn net.Conn, studentID string) {
 
 // checkRequest is a parsed request line from the stub.
 type checkRequest struct {
-	levelKey string
-	cwd      string
-	uid      uint32
-	gid      uint32
+	levelKey   string
+	cwd        string
+	uid        uint32
+	gid        uint32
+	studentID  string
 }
 
-// readCheckRequest parses "check\t<levelKey>\t<cwd>\t<uid>\t<gid>".
-func readCheckRequest(conn net.Conn) (checkRequest, error) {
+// readCheckRequestLine parses "check\t<levelKey>\t<cwd>\t<uid>\t<gid>" and
+// optionally "check\t...\t<studentID>" (added so the student ID travels with the
+// request instead of being captured once at session start).
+func readCheckRequestLine(line string) (checkRequest, error) {
 	var req checkRequest
-	br := bufio.NewReader(conn)
-	line, err := br.ReadString('\n')
-	if err != nil {
-		return req, err
-	}
 	parts := strings.Split(strings.TrimRight(line, "\n"), "\t")
-	if len(parts) != 5 || parts[0] != "check" {
+	if len(parts) != 5 && len(parts) != 6 {
+		return req, fmt.Errorf("malformed request")
+	}
+	if parts[0] != "check" {
 		return req, fmt.Errorf("malformed request")
 	}
 	uid, errU := strconv.ParseUint(parts[3], 10, 32)
@@ -150,6 +187,9 @@ func readCheckRequest(conn net.Conn) (checkRequest, error) {
 	req.cwd = parts[2]
 	req.uid = uint32(uid)
 	req.gid = uint32(gid)
+	if len(parts) == 6 {
+		req.studentID = parts[5]
+	}
 	return req, nil
 }
 
@@ -288,6 +328,11 @@ func validateLevelKey(levelKey string) bool {
 	if clean == "." || clean == ".." {
 		return false
 	}
+	for _, part := range strings.Split(clean, string(filepath.Separator)) {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
 	root := filepath.Clean(ChallengesDir)
 	joined := filepath.Join(root, clean)
 	if joined != root && !strings.HasPrefix(joined, root+string(filepath.Separator)) {
@@ -297,8 +342,10 @@ func validateLevelKey(levelKey string) bool {
 }
 
 // WriteCheckStubs places a thin, non-secret stub check.sh for every level found
-// in ChallengesDir into the chroot at the same relative path (Rootfs/tmp/<key>).
-// The stub contains no test logic and no flag; it only relays to the socket.
+// in ChallengesDir into the pristine staging tree at the same relative path
+// (PristineDir/<key>). The stub contains no test logic and no flag; it only
+// relays to the socket. It ships inside every ~/challenges/<level> copy that
+// qo-setup creates, so ./check.sh works from the student's home.
 func WriteCheckStubs() (int, error) {
 	if !pathExists(ChallengesDir) {
 		return 0, nil
@@ -326,7 +373,7 @@ func WriteCheckStubs() (int, error) {
 
 	n := 0
 	for _, lvl := range levels {
-		stub := filepath.Join(Rootfs, "tmp", lvl, checkStubName)
+		stub := filepath.Join(PristineDir, lvl, checkStubName)
 		if err := os.MkdirAll(filepath.Dir(stub), 0755); err != nil {
 			return n, err
 		}
@@ -344,14 +391,31 @@ func WriteCheckStubs() (int, error) {
 // check.sh content and base flags are read at runtime by the parent from the
 // protected directory, never embedded.
 func CopyCheckClient() error {
+	return copyClientBin(checkClientName)
+}
+
+// CopySetupClients installs /bin/qo-setup plus a /bin/qo-reset symlink. Both
+// share the same static binary; main.go dispatches on argv[0] (like qo-check),
+// so the sandbox user gets on-demand level setup and reset commands.
+func CopySetupClients() error {
+	if err := copyClientBin(setupClientName); err != nil {
+		return err
+	}
+	reset := filepath.Join(Rootfs, "bin", resetClientName)
+	_ = os.Remove(reset)
+	return os.Symlink(setupClientName, reset)
+}
+
+// copyClientBin places the running qo binary into the chroot under name.
+func copyClientBin(name string) error {
 	self, err := os.Readlink("/proc/self/exe")
 	if err != nil {
 		return fmt.Errorf("resolving self: %w", err)
 	}
-	dst := filepath.Join(Rootfs, "bin", checkClientName)
+	dst := filepath.Join(Rootfs, "bin", name)
 	_ = os.Remove(dst)
 	if err := copyFile(self, dst); err != nil {
-		return fmt.Errorf("copying check client: %w", err)
+		return fmt.Errorf("copying %s: %w", name, err)
 	}
 	return os.Chmod(dst, 0755)
 }
@@ -375,7 +439,15 @@ func RunCheckClient(args []string) int {
 	}
 	defer conn.Close()
 
-	req := fmt.Sprintf("check\t%s\t%s\t%d\t%d\n", level, cwd, os.Getuid(), os.Getgid())
+	// Carry the session's student ID with the request (set by qo start via
+	// QO_STUDENT_ID and inherited into the sandbox shell). The server prefers
+	// it over the ID captured at session start, so flags and leaderboard rows
+	// always match the session that actually ran the check.
+	req := fmt.Sprintf("check\t%s\t%s\t%d\t%d", level, cwd, os.Getuid(), os.Getgid())
+	if sid := os.Getenv("QO_STUDENT_ID"); sid != "" {
+		req += "\t" + sid
+	}
+	req += "\n"
 	if _, err := io.WriteString(conn, req); err != nil {
 		fmt.Fprintf(os.Stderr, "check request failed: %v\n", err)
 		return checkResponseError

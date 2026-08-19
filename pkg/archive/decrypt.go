@@ -164,7 +164,10 @@ func DecryptTarArchive(encryptedFile, password, utKey string) error {
 		if isSecret {
 			dest = filepath.Join(sandbox.ChallengesDir, header.Name)
 		} else {
-			dest = filepath.Join(sandbox.Rootfs, "tmp", header.Name)
+			// Non-secret level data goes to the root-only pristine staging tree
+			// (outside the chroot). The sandbox never sees it in /tmp; students
+			// get their working copy via qo-setup into ~/challenges/<level>.
+			dest = filepath.Join(sandbox.PristineDir, header.Name)
 		}
 
 		dirMode := os.FileMode(0755)
@@ -202,21 +205,6 @@ func DecryptTarArchive(encryptedFile, password, utKey string) error {
 			}
 
 		}
-	}
-
-	// The extracted level folders land root-owned (0755), which the sandbox
-	// user (uid/gid 1000) cannot write to. Hand the whole non-secret tree
-	// under Rootfs/tmp to them so they can create and modify their working
-	// files. Best-effort: non-root runs (tests, local dev) simply skip it.
-	if os.Getuid() == 0 {
-		root := filepath.Join(sandbox.Rootfs, "tmp")
-		_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			_ = os.Chown(p, 1000, 1000)
-			return nil
-		})
 	}
 
 	return nil

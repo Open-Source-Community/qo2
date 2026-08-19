@@ -28,7 +28,12 @@ const sentinel = "\x00__QO_EOF__\x00"
 var (
 	Rootfs        = filepath.Join(target, "rootfs")
 	ChallengesDir = filepath.Join(target, "rootfs_challenges")
-	defaultUser   = "ahmed"
+	// PristineDir holds root-only copies of each level's non-secret files. It
+	// is the reference the qo-setup/qo-reset commands copy into the sandbox
+	// user's home, so students never have to touch /tmp and can always restore
+	// a corrupted working copy.
+	PristineDir = filepath.Join(target, "rootfs_pristine")
+	defaultUser = "ahmed"
 )
 
 // manAllowlist is the finalized set of man topics students may read through the
@@ -163,7 +168,11 @@ func ExtractRootfs() error {
 	if pathExists(ChallengesDir) {
 		_ = os.RemoveAll(ChallengesDir)
 	}
+	if pathExists(PristineDir) {
+		_ = os.RemoveAll(PristineDir)
+	}
 	_ = os.MkdirAll(ChallengesDir, 0700)
+	_ = os.MkdirAll(PristineDir, 0700)
 
 	gzReader, err := gzip.NewReader(bytes.NewReader(embeddedRootfs))
 	if err != nil {
@@ -224,22 +233,22 @@ func ExtractRootfs() error {
 				if !f.IsDir() {
 					srcPath := filepath.Join(assetsDir, f.Name())
 					dstPath := filepath.Join(Rootfs, "home/ahmed", f.Name())
-					
+
 					src, err := os.Open(srcPath)
 					if err != nil {
 						continue
 					}
-					
+
 					dst, err := os.Create(dstPath)
 					if err != nil {
 						src.Close()
 						continue
 					}
-					
+
 					io.Copy(dst, src)
 					src.Close()
 					dst.Close()
-					
+
 					// ensure the file is readable by the sandbox user
 					os.Chmod(dstPath, 0644)
 					// chown to ahmed (uid=1000, gid=1000) so the sandbox user can modify it
@@ -264,6 +273,7 @@ func ExtractRootfs() error {
 		"tail", "head", "stat", "df", "du", "free", "chmod", "chown", "wc", "tee",
 		"sed", "touch", "rm", "mkdir", "zcat", "cp", "mv", "cut", "sort", "uniq",
 		"whoami", "pwd", "ping", "unzip", "pgrep", "pkill", "nano", "vim", "awk",
+		"sleep", "diff",
 	}
 	for _, tool := range tools {
 		_ = provisionTool(tool)
@@ -453,6 +463,7 @@ func runSessionLoop() error {
 			"MANPATH=/usr/share/man:/usr/local/share/man",
 			"PAGER=less",
 			"MANPAGER=less",
+			"QO_STUDENT_ID=" + os.Getenv("QO_STUDENT_ID"),
 			// Ensure dynamic linker finds libs regardless of distro layout
 			"LD_LIBRARY_PATH=/usr/lib:/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu",
 		}
@@ -637,9 +648,9 @@ func provisionLib(hostPath string) error {
 
 // ensureLibSymlinks guarantees that /lib, /lib64, /usr/lib64, and /usr/bin
 // inside the sandbox all resolve correctly, regardless of host distro layout.
-// - Arch/Fedora: /usr/lib contains everything; /lib64 & /lib are already symlinks.
-// - Ubuntu/Debian: libraries live under /lib/x86_64-linux-gnu/ which the os
-//   functions redirect through the /lib -> usr/lib symlink we ensure here.
+//   - Arch/Fedora: /usr/lib contains everything; /lib64 & /lib are already symlinks.
+//   - Ubuntu/Debian: libraries live under /lib/x86_64-linux-gnu/ which the os
+//     functions redirect through the /lib -> usr/lib symlink we ensure here.
 func ensureLibSymlinks() {
 	usrLib := filepath.Join(Rootfs, "usr/lib")
 	os.MkdirAll(usrLib, 0755)

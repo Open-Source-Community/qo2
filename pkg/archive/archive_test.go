@@ -70,17 +70,20 @@ func TestIsValidFolderStructure(t *testing.T) {
 
 // TestArchiveRoundTripSecrecy builds a challenge archive, decrypts it, and
 // verifies the secrecy routing: secret files land only in the protected
-// challenges directory (0700), public files land inside the chroot tree.
+// challenges directory (0700), public files land in the root-only pristine
+// staging tree.
 func TestArchiveRoundTripSecrecy(t *testing.T) {
-	oldRoot, oldChal := sandbox.Rootfs, sandbox.ChallengesDir
+	oldRoot, oldChal, oldPristine := sandbox.Rootfs, sandbox.ChallengesDir, sandbox.PristineDir
 	tmp := t.TempDir()
 	sandbox.Rootfs = filepath.Join(tmp, "rootfs")
 	sandbox.ChallengesDir = filepath.Join(tmp, "challenges")
+	sandbox.PristineDir = filepath.Join(tmp, "pristine")
 	defer func() {
-		sandbox.Rootfs, sandbox.ChallengesDir = oldRoot, oldChal
+		sandbox.Rootfs, sandbox.ChallengesDir, sandbox.PristineDir = oldRoot, oldChal, oldPristine
 	}()
 	os.MkdirAll(sandbox.Rootfs, 0755)
 	os.MkdirAll(sandbox.ChallengesDir, 0700)
+	os.MkdirAll(sandbox.PristineDir, 0700)
 
 	// Build a challenge folder with both secret and public files.
 	chalDir := filepath.Join(tmp, "challenges")
@@ -107,19 +110,24 @@ func TestArchiveRoundTripSecrecy(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sandbox.ChallengesDir, "challenges", "level1", ".base_flag")); err != nil {
 		t.Errorf(".base_flag not in protected dir: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(sandbox.Rootfs, "tmp", "challenges", "level1", "check.sh")); err == nil {
-		t.Errorf("check.sh leaked into rootfs tree")
-	}
-	if _, err := os.Stat(filepath.Join(sandbox.Rootfs, "tmp", "challenges", "level1", ".base_flag")); err == nil {
-		t.Errorf(".base_flag leaked into rootfs tree")
+	// Secrets must never reach the pristine staging tree (which qo-setup copies
+	// into the student's home) or the rootfs tree.
+	for _, base := range []string{sandbox.PristineDir, sandbox.Rootfs} {
+		if _, err := os.Stat(filepath.Join(base, "challenges", "level1", "check.sh")); err == nil {
+			t.Errorf("check.sh leaked into %s tree", base)
+		}
+		if _, err := os.Stat(filepath.Join(base, "challenges", "level1", ".base_flag")); err == nil {
+			t.Errorf(".base_flag leaked into %s tree", base)
+		}
 	}
 
-	// Public files must be readable inside the chroot tree.
-	if _, err := os.Stat(filepath.Join(sandbox.Rootfs, "tmp", "challenges", "level1", "question.txt")); err != nil {
-		t.Errorf("question.txt missing from rootfs tree: %v", err)
+	// Public files must land in the pristine staging tree (root-only, outside
+	// the chroot), which qo-setup copies into ~/challenges/<level>.
+	if _, err := os.Stat(filepath.Join(sandbox.PristineDir, "challenges", "level1", "question.txt")); err != nil {
+		t.Errorf("question.txt missing from pristine tree: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(sandbox.Rootfs, "tmp", "challenges", "level1", "secret.txt")); err != nil {
-		t.Errorf("secret.txt missing from rootfs tree: %v", err)
+	if _, err := os.Stat(filepath.Join(sandbox.PristineDir, "challenges", "level1", "secret.txt")); err != nil {
+		t.Errorf("secret.txt missing from pristine tree: %v", err)
 	}
 
 	// Protected directory must be root-only.

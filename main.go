@@ -14,10 +14,17 @@ import (
 
 func main() {
 
-	// The sandbox contains a copy of this binary as /bin/qo-check, used by the
-	// per-level check.sh stubs to relay requests to the privileged parent.
-	if filepath.Base(os.Args[0]) == "qo-check" {
+	// The sandbox contains copies of this binary as /bin/qo-check, /bin/qo-setup
+	// and /bin/qo-reset (qo-reset is a symlink to qo-setup), used by the level
+	// check stubs and the on-demand setup/reset commands to relay requests to
+	// the privileged parent.
+	switch filepath.Base(os.Args[0]) {
+	case "qo-check":
 		os.Exit(sandbox.RunCheckClient(os.Args[1:]))
+	case "qo-setup":
+		os.Exit(sandbox.RunSetupClient(os.Args[1:]))
+	case "qo-reset":
+		os.Exit(sandbox.RunResetClient(os.Args[1:]))
 	}
 
 	if len(os.Args) > 1 && os.Args[1] == "init" {
