@@ -39,17 +39,18 @@ fi
 
 # 3. Clone or Enter Directory
 echo -e "${BLUE}[2/5] Fetching source code...${NC}"
+QO2_BRANCH="ctf-improvements"
 if [ -f "main.go" ] && [ -d "pkg" ]; then
     echo -e "${GREEN}Already in project directory.${NC}"
 else
     if [ ! -d "qo2" ]; then
         echo -e "Cloning repository..."
-        git clone -b interview https://github.com/Open-Source-Community/qo2.git
+        git clone -b "$QO2_BRANCH" https://github.com/Open-Source-Community/qo2.git
     else
         echo -e "${GREEN}Directory 'qo2' already exists. Updating...${NC}"
         cd qo2
-        git checkout interview 2>/dev/null || git checkout -b interview origin/interview
-        git pull origin interview
+        git checkout "$QO2_BRANCH" 2>/dev/null || git checkout -b "$QO2_BRANCH" "origin/$QO2_BRANCH"
+        git pull origin "$QO2_BRANCH"
         cd ..
     fi
     cd qo2
