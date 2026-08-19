@@ -1,14 +1,17 @@
 #!/bin/bash
 
 # test-e2e.sh - Automated End-to-End Integration Test for CI
-# Builds binary, creates multi-level challenge folder, encrypts to .enc archive,
-# extracts in sandbox, evaluates student commands, verifies check.sh secrecy & HMAC flags.
+# Builds the binary, creates a multi-level challenge folder, encrypts it to an
+# .enc archive, decrypts it, and exercises the check.sh execution path inside
+# the sandbox (stub -> socket server -> chrooted check child -> HMAC flag).
+# Root-gated tests exercise the real chroot; non-root tests verify secrecy.
 
 set -e
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}=== Starting QO2 End-to-End Encrypted Archive Integration Test ===${NC}"
@@ -28,48 +31,61 @@ echo -e "${BLUE}[1/4] Generating multi-level challenge folder...${NC}"
 
 # Level 1: Directory creation (mkdir)
 mkdir -p "$CHALLENGE_DIR/level1"
-cat <<'EOF' > "$CHALLENGE_DIR/level1/question.txt"
+cat <<'EOF' > "$CHALLENGE_DIR/level1/README.md"
 Create a directory named 'testdir' in your working directory.
 EOF
+echo "Hint: use 'mkdir testdir'" > "$CHALLENGE_DIR/level1/hint.txt"
 cat <<'EOF' > "$CHALLENGE_DIR/level1/check.sh"
 #!/bin/bash
 if [ -d "$PWD/testdir" ]; then
+    echo "Level 1 passed!"
+    echo "key=\"LVL-1-K7Q4X\""
     exit 0
 else
+    echo "Level 1 failed: 'testdir' does not exist."
     exit 1
 fi
 EOF
+echo "LVL-1-K7Q4X" > "$CHALLENGE_DIR/level1/.base_flag"
 chmod +x "$CHALLENGE_DIR/level1/check.sh"
 
 # Level 2: User management (useradd)
 mkdir -p "$CHALLENGE_DIR/level2"
-cat <<'EOF' > "$CHALLENGE_DIR/level2/question.txt"
+cat <<'EOF' > "$CHALLENGE_DIR/level2/README.md"
 Create a user named 'studentuser'.
 EOF
 cat <<'EOF' > "$CHALLENGE_DIR/level2/check.sh"
 #!/bin/bash
 if id "studentuser" &>/dev/null; then
+    echo "Level 2 passed!"
+    echo "key=\"LVL-2-M3R2D\""
     exit 0
 else
+    echo "Level 2 failed: user 'studentuser' does not exist."
     exit 1
 fi
 EOF
+echo "LVL-2-M3R2D" > "$CHALLENGE_DIR/level2/.base_flag"
 chmod +x "$CHALLENGE_DIR/level2/check.sh"
 
 # Level 3: File permissions (chmod)
 mkdir -p "$CHALLENGE_DIR/level3"
-cat <<'EOF' > "$CHALLENGE_DIR/level3/question.txt"
+cat <<'EOF' > "$CHALLENGE_DIR/level3/README.md"
 Copy secret.txt to $HOME/secret.txt and set permissions to 600.
 EOF
 echo "Level 3 secret content" > "$CHALLENGE_DIR/level3/secret.txt"
 cat <<'EOF' > "$CHALLENGE_DIR/level3/check.sh"
 #!/bin/bash
 if [ -f "$HOME/secret.txt" ] && [ "$(stat -c "%a" "$HOME/secret.txt" 2>/dev/null)" == "600" ]; then
+    echo "Level 3 passed!"
+    echo "key=\"LVL-3-P9W1Z\""
     exit 0
 else
+    echo "Level 3 failed: Check file copy and permissions."
     exit 1
 fi
 EOF
+echo "LVL-3-P9W1Z" > "$CHALLENGE_DIR/level3/.base_flag"
 chmod +x "$CHALLENGE_DIR/level3/check.sh"
 
 # 2. Build qo binary and encrypt archive
@@ -84,15 +100,17 @@ if [ ! -f "$ARCHIVE_PATH" ]; then
 fi
 echo -e "${GREEN}Encrypted archive built successfully.${NC}"
 
-# 3. Test Secrecy & Sandbox Isolation in Go Integration Test
-echo -e "${BLUE}[3/4] Running Go sandbox isolation & secrecy verification...${NC}"
-go test -v ./pkg/sandbox/... -run TestGenerateUniqueFlag
+# 3. Run the secrecy & archive round-trip tests (non-root)
+echo -e "${BLUE}[3/4] Running secrecy & archive round-trip tests...${NC}"
+go test -v ./pkg/archive/... -run 'TestArchiveRoundTripSecrecy|TestIsValidFolderStructure'
+go test -v ./pkg/sandbox/... -run 'TestWriteCheckStubsSecrecy|TestLoadBaseFlag|TestPresentCheckSuccess|TestValidateLevelKey|TestGenerateUniqueFlag'
 
-# 4. Verify check.sh scripts are placed in /tmp/rootfs_challenges (outside chroot)
-echo -e "${BLUE}[4/4] Verifying challenge script extraction isolation...${NC}"
-mkdir -p /tmp/rootfs /tmp/rootfs_challenges
-
-# Decrypt using internal decrypt
-go test -v ./pkg/archive/... -run TestDeriveKey
+# 4. Run the root-required check-execution tests (real chroot + socket + HMAC)
+echo -e "${BLUE}[4/4] Running root-required check-execution tests...${NC}"
+if [ "$(id -u)" == "0" ]; then
+    go test -v ./pkg/sandbox/... -run 'TestCheckSocketRoundTrip|TestCheckServerSocketMode'
+else
+    echo -e "${YELLOW}Not running as root; skipping chroot integration tests.${NC}"
+fi
 
 echo -e "${GREEN}=== All End-to-End Encrypted Archive Tests Passed Successfully! ===${NC}"

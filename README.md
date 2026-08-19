@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/ctf-impro
    ```bash
    sudo qo start -i 2021170034 -a test.enc -p mypassword -k starterkey -d 90m
    ```
-   _**Note:** Setting duration is not implemented yet. The option is required but has no effect._
+   _**Note:** Setting duration is not implemented yet. The option is accepted but has no effect._
 
 
 ## Usage
@@ -95,7 +95,7 @@ Launches secure testing environment for students to complete challenges.
 - `-a, --archive` — Path to encrypted challenge archive
 - `-p, --password` — Archive decryption password
 - `-k, --key` — Starter key provided by instructor
-- `-d, --duration` — Test duration (e.g., `90m`, `2h`, `1h30m`) _(required but not implemented yet)_
+- `-d, --duration` — Test duration (e.g., `90m`, `2h`, `1h30m`) _(accepted but not implemented yet)_
 
 **Optional Flags:**
 - `-o, --output` — Results directory (default: `eval-results`) _(not implemented yet)_

@@ -17,7 +17,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26'
 
       - name: Run Go Unit Tests
         run: go test -v ./pkg/...
@@ -46,7 +46,7 @@ jobs:
             elif command -v dnf >/dev/null; then
               dnf install -y sqlite git tar zip gzip bzip2 curl
             fi
-            curl -fsSL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz | tar -C /usr/local -xz
+            curl -fsSL https://go.dev/dl/go1.26.6.linux-amd64.tar.gz | tar -C /usr/local -xz
             export PATH=/usr/local/go/bin:\$PATH
             go version
             go test -v ./pkg/...
