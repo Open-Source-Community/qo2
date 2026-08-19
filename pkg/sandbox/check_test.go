@@ -209,13 +209,16 @@ func TestCheckSocketRoundTrip(t *testing.T) {
 	os.MkdirAll(filepath.Join(Rootfs, "home", "ahmed", "level1", "answer"), 0755)
 
 	// The sandbox child normally bind-mounts /dev/null before the shell starts;
-	// replicate it so the check child has a working /dev/null.
+	// replicate it so the check child has a working /dev/null. If the host
+	// blocks mounts (e.g. an unprivileged CI container), fall back to the plain
+	// regular file — functionally equivalent for the check child.
 	os.MkdirAll(filepath.Join(Rootfs, "dev"), 0755)
 	os.WriteFile(filepath.Join(Rootfs, "dev", "null"), nil, 0666)
 	if err := syscall.Mount("/dev/null", filepath.Join(Rootfs, "dev", "null"), "", syscall.MS_BIND, ""); err != nil {
-		t.Fatalf("mount /dev/null: %v", err)
+		t.Logf("bind-mount /dev/null unavailable (%v); using regular file", err)
+	} else {
+		defer syscall.Unmount(filepath.Join(Rootfs, "dev", "null"), syscall.MNT_FORCE)
 	}
-	defer syscall.Unmount(filepath.Join(Rootfs, "dev", "null"), syscall.MNT_FORCE)
 
 	if _, err := WriteCheckStubs(); err != nil {
 		t.Fatal(err)
