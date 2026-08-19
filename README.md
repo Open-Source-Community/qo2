@@ -112,20 +112,36 @@ Your challenge folder should follow this structure:
 ```
 challenges/
 ├── level1/
-│   ├── description.md
+│   ├── README.md
 │   ├── check.sh
+│   ├── .base_flag
+│   ├── hint.txt
 │   └── files/
 ├── level2/
-│   ├── description.md
+│   ├── README.md
 │   ├── check.sh
+│   ├── .base_flag
+│   ├── hint.txt
 │   └── files/
 └── README.md
 ```
 
 Each level should contain:
-- **description.md**: Challenge instructions for students
-- **check.sh**: Automated validation script
+- **README.md**: Challenge instructions for students
+- **check.sh**: Automated validation script (read-only by the tool, kept out of the sandbox)
+- **hint.txt / hint1.txt, hint2.txt, ...**: Progressive hints, delivered read-only to the student's sandbox
+- **.base_flag**: Per-level secret used to derive each student's unique flag (kept out of the sandbox)
 - **files/**: Any supporting files needed
+
+### How check.sh works for students
+
+Students solve the task described in the level's `README.md` inside their own
+sandbox shell. When ready, they run `./check.sh` (delivered as a thin stub). The
+stub relays the request over a session-scoped Unix socket to the privileged
+parent, which runs the real script inside a chrooted child and returns the full
+diagnostic output — exactly like the historical tool. On success the parent
+replaces the hardcoded `key="..."` with a per-student flag derived via HMAC over
+`(base_flag, student_id)`, so every student gets their own flag.
 
 ## Customizing the Sandbox
 
