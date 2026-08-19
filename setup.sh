@@ -53,8 +53,26 @@ install_binary() {
         sudo ln -sf "$dest" "$INSTALL_DIR/$alias"
     done
 
+    install_sudo_symlinks "$dest"
+
     log "installed: $dest"
     log "done. Verify with: qo --help"
+}
+
+# install_sudo_symlinks also links into /usr/bin. Fedora's sudo default
+# secure_path is /sbin:/bin:/usr/sbin:/usr/bin — it excludes /usr/local/bin,
+# so `sudo qo` would report "command not found" even though qo is installed.
+# /usr/bin is in the sudo PATH on every distro, so the symlink makes
+# `sudo qo start ...` work everywhere.
+install_sudo_symlinks() {
+    local dest="$1"
+    if [ ! -d /usr/bin ]; then
+        return
+    fi
+    sudo ln -sf "$dest" /usr/bin/$APP_NAME
+    for alias in qo-check qo-setup qo-reset; do
+        sudo ln -sf "$dest" /usr/bin/$alias
+    done
 }
 
 detect_pkg_mgr() {
@@ -195,6 +213,8 @@ build_and_install() {
     for alias in qo-check qo-setup qo-reset; do
         sudo ln -sf "$dest" "$INSTALL_DIR/$alias"
     done
+
+    install_sudo_symlinks "$dest"
 
     log "installed: $dest"
 }
