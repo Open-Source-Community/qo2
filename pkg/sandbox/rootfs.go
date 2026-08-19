@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -313,9 +314,39 @@ func StartSandBox() error {
 	switch os.Getenv("SANDBOX_MODE") {
 	case "session":
 		return runSessionLoop()
+	case "cli":
+		return runInteractiveShell()
 	default:
 		return runInteractiveShell()
 	}
+}
+
+// StartSandboxSession is the CLI entry point used by the privileged parent. It
+// forks a child that chroots into the rootfs and drops into an interactive
+// shell, while the parent keeps running (holding the check socket listener).
+// No private mount namespace is used here so the /dev/null and /proc mounts the
+// sandbox child makes stay visible to the short-lived check children the parent
+// forks later.
+func StartSandboxSession() error {
+	signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Reset(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+	cmd := exec.Command("/proc/self/exe", "init")
+	cmd.Env = append(os.Environ(), "SANDBOX_MODE=cli")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting sandbox session: %w", err)
+	}
+	err := cmd.Wait()
+
+	// Best-effort cleanup of the mounts the sandbox child made in the shared
+	// mount namespace.
+	_ = syscall.Unmount(filepath.Join(Rootfs, "proc"), syscall.MNT_FORCE)
+	_ = syscall.Unmount(filepath.Join(Rootfs, "dev", "null"), syscall.MNT_FORCE)
+
+	return err
 }
 
 func runSessionLoop() error {

@@ -213,3 +213,39 @@ func (client *SupabaseClient) SubmitQuestion(session *Session, currentQuestion i
 func (client *SupabaseClient) Close() {
 	//
 }
+
+// SendLeaderboardFlag reports a successfully completed level to the leaderboard
+// as a single best-effort send of {student_id, question_id, flag}. On failure it
+// logs locally and does nothing further: there is deliberately no retry queue
+// and no idempotency key. This is the check-execution integration point for the
+// CLI flow and must not exit the process, so it deliberately avoids the
+// log.Fatalf paths in Initialize.
+func SendLeaderboardFlag(studentID, questionID, flag string) {
+	sb, err := supabase.NewClient(
+		API_URL,
+		API_KEY,
+		&supabase.ClientOptions{},
+	)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("Leaderboard sync skipped (client init failed): %v", err))
+		return
+	}
+
+	// Anonymous sign-in, same call as SupabaseClient.Initialize but without the
+	// log.Fatalf wrapper so a network failure is handled gracefully.
+	resp, err := sb.Auth.Signup(types.SignupRequest{})
+	if err != nil {
+		logger.Warn(fmt.Sprintf("Leaderboard sync skipped (auth failed): %v", err))
+		return
+	}
+	sb.UpdateAuthSession(resp.Session)
+
+	_, _, err = sb.From("submissions").Insert(map[string]interface{}{
+		"student_id":  studentID,
+		"question_id": questionID,
+		"flag":        flag,
+	}, false, "", "minimal", "").Execute()
+	if err != nil {
+		logger.Warn(fmt.Sprintf("Leaderboard sync failed: %v", err))
+	}
+}

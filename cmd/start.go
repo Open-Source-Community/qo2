@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ahmedYasserM/qo/pkg/archive"
+	"github.com/ahmedYasserM/qo/pkg/database"
 	"github.com/ahmedYasserM/qo/pkg/logger"
 	"github.com/ahmedYasserM/qo/pkg/sandbox"
 	"github.com/spf13/cobra"
@@ -74,11 +75,27 @@ var startCmd = &cobra.Command{
 
 		logger.Success(fmt.Sprintf("%s folder is unpacked and decrypted successfully.", archivePath))
 
-		err = sandbox.StartSandBox()
+		// check.sh execution setup: thin stubs inside the chroot relay over a
+		// Unix socket to this privileged parent, which runs the real scripts.
+		if _, err := sandbox.WriteCheckStubs(); err != nil {
+			return fmt.Errorf("writing check stubs: %w", err)
+		}
+		if err := sandbox.CopyCheckClient(); err != nil {
+			return fmt.Errorf("copying check client: %w", err)
+		}
+		ln, err := sandbox.StartCheckServer(idStr)
+		if err != nil {
+			return err
+		}
+		defer ln.Close()
+
+		sandbox.LeaderboardHook = database.SendLeaderboardFlag
+		err = sandbox.StartSandboxSession()
 
 		return err
 	},
 }
+
 
 func init() {
 	rootCmd.AddCommand(startCmd)
