@@ -27,7 +27,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ahmedYasserM/qo/pkg/archive"
@@ -65,6 +67,10 @@ var startCmd = &cobra.Command{
 		}
 		os.Setenv("QO_STUDENT_ID", idStr)
 
+		// Expand a literal leading ~ before touching the filesystem.
+		archivePath = expandHome(archivePath)
+		outputLogDir = expandHome(outputLogDir)
+
 		if err := sandbox.ExtractRootfs(); err != nil {
 			return err
 		}
@@ -96,6 +102,20 @@ var startCmd = &cobra.Command{
 	},
 }
 
+// expandHome expands a literal leading ~ or ~/ to the invoking user's home
+// directory. The shell normally expands an unquoted ~; this covers quoted
+// values passed through scripts.
+func expandHome(p string) string {
+	if p == "~" {
+		p = "~/"
+	}
+	if strings.HasPrefix(p, "~/") {
+		if h, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(h, p[2:])
+		}
+	}
+	return p
+}
 
 func init() {
 	rootCmd.AddCommand(startCmd)
