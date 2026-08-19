@@ -268,6 +268,12 @@ func runLevelCheck(req checkRequest) (string, int, string, error) {
 		"USER=" + user,
 		"LOGNAME=" + user,
 		"TERM=xterm",
+		// The chroot has no ld.so.cache, so the loader must find the host-
+		// provisioned libraries via LD_LIBRARY_PATH. This must match the
+		// interactive sandbox shell (rootfs.go); without it, forking bash on
+		// distros whose glibc default paths differ fails with
+		// "error while loading shared libraries".
+		"LD_LIBRARY_PATH=/usr/lib:/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu",
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
