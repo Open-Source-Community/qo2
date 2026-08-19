@@ -65,6 +65,16 @@ var startCmd = &cobra.Command{
 			logger.Error(fmt.Errorf("invalid student ID: %w", err))
 			os.Exit(1)
 		}
+		if !validStartModes()[startMode] {
+			logger.Error(fmt.Errorf("invalid mode %q: must be 'eval' or 'test'", startMode))
+			os.Exit(1)
+		}
+		database.SubmissionTable = "submissions"
+		database.SessionSource = "eval"
+		if startMode == "test" {
+			database.SubmissionTable = "test_submissions"
+			database.SessionSource = "test"
+		}
 		os.Setenv("QO_STUDENT_ID", idStr)
 
 		// Expand a literal leading ~ before touching the filesystem.
@@ -89,17 +99,34 @@ var startCmd = &cobra.Command{
 		if err := sandbox.CopyCheckClient(); err != nil {
 			return fmt.Errorf("copying check client: %w", err)
 		}
+		if err := sandbox.CopySetupClients(); err != nil {
+			return fmt.Errorf("copying setup clients: %w", err)
+		}
 		ln, err := sandbox.StartCheckServer(idStr)
 		if err != nil {
 			return err
 		}
 		defer ln.Close()
 
+		// Record the student's arrival in the background (best-effort) so the
+		// admin "who entered / who didn't" page is up to date. The mode flag
+		// decides which Supabase tables get used for this session's data.
+		go database.ReportStudentEntry(idStr)
+
 		sandbox.LeaderboardHook = database.SendLeaderboardFlag
 		err = sandbox.StartSandboxSession()
 
 		return err
 	},
+}
+
+// startMode is the destination for this session's data. "eval" writes to the
+// real submissions/table; "test" writes to test_submissions/session_logs so the
+// practice run before the event never pollutes final-day data.
+var startMode string
+
+func validStartModes() map[string]bool {
+	return map[string]bool{"eval": true, "test": true}
 }
 
 // expandHome expands a literal leading ~ or ~/ to the invoking user's home
@@ -122,6 +149,7 @@ func init() {
 
 	// Flags
 	startCmd.Flags().StringVarP(&idStr, "id", "i", "0", "Student ID (required)")
+	startCmd.Flags().StringVarP(&startMode, "mode", "m", "eval", "Destination for this session: 'eval' (real leaderboard) or 'test' (practice tables)")
 	startCmd.Flags().StringVarP(&archivePath, "archive", "a", "", "Path to the encrypted archive file (required)")
 	startCmd.Flags().StringVarP(&passwordStart, "password", "p", "", "Password used for encrypt the archive (required)")
 	startCmd.Flags().StringVarP(&utKeyStart, "key", "k", "", "Starter key used for decryption (required)")
