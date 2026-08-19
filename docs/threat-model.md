@@ -49,7 +49,14 @@ flow is out of scope.
    next `ExtractRootfs`).
 5. **Level keys are validated.** The stub's level identity is checked against a
    path-containment rule before the parent touches `ChallengesDir`; `..`/
-   absolute/odd characters are rejected.
+   absolute/odd characters are rejected (applies to the `check`, `setup`, and
+   `reset` socket verbs alike).
+6. **The student never sees `/tmp`.** Non-secret level data is extracted to the
+   root-only pristine staging tree (`/tmp/rootfs_pristine`, mode `0700`) and
+   shipped to `~/challenges/<level>` only via the `qo-setup`/`qo-reset` socket
+   verbs. The student works exclusively from their home directory; a corrupted
+   working copy is restorable at any time by re-running `qo-setup`/`qo-reset`,
+   which wipes and re-copies from pristine.
 
 ## Attack surface and responses
 
@@ -61,9 +68,14 @@ flow is out of scope.
   leaves the parent (property 3).
 - **Student replays/brute-forces the socket**: the socket only runs the real
   check for the requested level and returns output; no new capability. `exit 0`
-  is still gated on the check passing.
+  is still gated on the check passing. The `setup`/`reset` verbs only copy
+  non-secret pristine data into the requester's own home; they cannot reach
+  `ChallengesDir`.
 - **Student alters the stub**: the stub carries no secrets; tampering only
   breaks their own `./check.sh`.
+- **Student corrupts their working copy**: `qo-setup`/`qo-reset` restore the
+  level from pristine; the pristine tree is root-only and re-extracted fresh on
+  every `qo start`.
 - **Student reads `/proc` of host processes**: possible (no PID namespace);
   accepted risk. Avoid placing session secrets in host process env/cmdlines.
 - **Network exfiltration**: sandbox shares the host network. The base flag never

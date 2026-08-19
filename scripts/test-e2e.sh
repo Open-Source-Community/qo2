@@ -90,7 +90,7 @@ chmod +x "$CHALLENGE_DIR/level3/check.sh"
 
 # 2. Build qo binary and encrypt archive
 echo -e "${BLUE}[2/4] Building binary & encrypting challenge archive...${NC}"
-go build -o "$WORK_DIR/qo" main.go
+CGO_ENABLED=0 go build -o "$WORK_DIR/qo" main.go
 
 "$WORK_DIR/qo" build -f "$CHALLENGE_DIR" -p "$PASS" -k "$KEY" -u "2020-01-01 00:00" -o "$ARCHIVE_PATH"
 
@@ -103,7 +103,7 @@ echo -e "${GREEN}Encrypted archive built successfully.${NC}"
 # 3. Run the secrecy & archive round-trip tests (non-root)
 echo -e "${BLUE}[3/4] Running secrecy & archive round-trip tests...${NC}"
 go test -v ./pkg/archive/... -run 'TestArchiveRoundTripSecrecy|TestIsValidFolderStructure'
-go test -v ./pkg/sandbox/... -run 'TestWriteCheckStubsSecrecy|TestLoadBaseFlag|TestPresentCheckSuccess|TestValidateLevelKey|TestGenerateUniqueFlag'
+go test -v ./pkg/sandbox/... -run 'TestWriteCheckStubsSecrecy|TestLoadBaseFlag|TestPresentCheckSuccess|TestValidateLevelKey|TestGenerateUniqueFlag|TestRunSetup|TestSetupSocketRoundTrip'
 
 # 4. Run the root-required check-execution tests (real chroot + socket + HMAC)
 echo -e "${BLUE}[4/4] Running root-required check-execution tests...${NC}"

@@ -143,6 +143,28 @@ diagnostic output — exactly like the historical tool. On success the parent
 replaces the hardcoded `key="..."` with a per-student flag derived via HMAC over
 `(base_flag, student_id)`, so every student gets their own flag.
 
+### Working in the sandbox (home-based challenges)
+
+Students never touch `/tmp`. On first login they set up their challenge folders
+from the root-only pristine staging area:
+
+```bash
+qo-setup          # copies every level into ~/challenges/
+qo-setup level1   # or just one level
+cd ~/challenges/level1
+cat README.md
+./check.sh        # verified from home
+```
+
+A level whose files were corrupted can be restored at any time:
+
+```bash
+qo-reset level1   # wipe ~/challenges/level1 and re-copy pristine files
+```
+
+Both commands relay over the same socket as `qo-check`; the parent copies only
+non-secret data and never exposes the real `check.sh` or the base flag.
+
 ## Customizing the Sandbox
 
 ### Adding System Binaries
