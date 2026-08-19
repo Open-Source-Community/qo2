@@ -4,13 +4,29 @@
 
 ## 1. Install `qo`
 
-Open a terminal and run:
+Download the **`qo`** binary and **`setup.sh`** from the drive (see step 2 — the same
+folder as `test.enc`), save both in your home folder, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/ctf-improvements/setup.sh | bash
+cd ~
+chmod +x qo setup.sh
+./setup.sh ./qo
 ```
 
-The script detects your distro, installs the required tools (Go, tar, gzip), builds `qo`, and installs it to `/usr/local/bin/qo`. Verify:
+The script installs `qo` to `/usr/local/bin` and creates the `qo-check`,
+`qo-setup`, and `qo-reset` aliases it needs.
+
+> No script? Install manually:
+>
+> ```bash
+> chmod +x qo
+> sudo mv qo /usr/local/bin/qo
+> sudo ln -sf /usr/local/bin/qo /usr/local/bin/qo-check
+> sudo ln -sf /usr/local/bin/qo /usr/local/bin/qo-setup
+> sudo ln -sf /usr/local/bin/qo /usr/local/bin/qo-reset
+> ```
+
+Verify:
 
 ```bash
 qo --help
@@ -22,7 +38,8 @@ Get the practice archive from the drive:
 
 **https://drive.google.com/drive/folders/1nhKUefmOJ8FNPSUXz4sXmCMmDvnXtsc3?usp=sharing**
 
-Download `test.enc` and save it in your home folder.
+Download `test.enc` (and `qo` + `setup.sh` from step 1, if you haven't) and save
+them in your home folder.
 
 ## 3. Start the practice session
 

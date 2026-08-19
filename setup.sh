@@ -11,6 +11,12 @@
 # Or from a checkout:
 #   ./setup.sh
 #
+# If the qo2 repo is private (it is), the curl/clone path above will not work —
+# that flow is for public checkouts only. For private repos, distribute the
+# static binary directly (e.g. alongside test.enc) and install it with:
+#   ./setup.sh ./qo        # path to the downloaded qo binary
+#   ./setup.sh qo          # or any local file
+#
 # Set QO_SKIP_DEPS=1 to skip the package-manager step (e.g. you already have go).
 set -e
 
@@ -25,6 +31,32 @@ die()  { printf '\033[1;31m[qo]\033[0m %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+install_binary() {
+    local src="$1"
+
+    if [ ! -f "$src" ]; then
+        die "binary not found: $src"
+    fi
+    if [ ! -x "$src" ]; then
+        chmod +x "$src"
+    fi
+
+    local dest="$INSTALL_DIR/$APP_NAME"
+    if [ -w "$INSTALL_DIR" ]; then
+        mv -f "$src" "$dest"
+    else
+        sudo mv -f "$src" "$dest"
+    fi
+    sudo chmod 755 "$dest"
+
+    for alias in qo-check qo-setup qo-reset; do
+        sudo ln -sf "$dest" "$INSTALL_DIR/$alias"
+    done
+
+    log "installed: $dest"
+    log "done. Verify with: qo --help"
+}
 
 detect_pkg_mgr() {
     if have apt-get; then echo apt
@@ -108,6 +140,17 @@ if [ "$1" = "uninstall" ]; then
     exit 0
 fi
 
+# Prebuilt binary path: if a local qo binary is given (or present in cwd),
+# install it directly. This is the flow for private-repo distribution — the
+# clone/curl paths below need the repo to be public.
+if [ -n "$1" ] && [ -f "$1" ]; then
+    install_binary "$1"
+    exit 0
+elif [ -f "./qo" ] && [ -x "./qo" ] && [ "$1" != "uninstall" ]; then
+    install_binary "./qo"
+    exit 0
+fi
+
 # Build from a local checkout if present, otherwise clone a fresh copy.
 if [ -f ./main.go ] && [ -d ./pkg ]; then
     log "building from local checkout: $PWD"
@@ -118,7 +161,7 @@ else
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
     log "cloning $REPO_URL ..."
-    git clone --depth=1 "$REPO_URL" "$TMP_DIR/qo2"
+    git clone --depth=1 "$REPO_URL" "$TMP_DIR/qo2" || die "cannot clone $REPO_URL — the repo is private; download the qo binary and run: ./setup.sh ./qo"
     build_and_install "$TMP_DIR/qo2"
 fi
 
