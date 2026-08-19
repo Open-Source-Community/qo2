@@ -42,6 +42,7 @@ cd ~
 sudo qo start -m test -i <YOUR_STUDENT_ID> -a ~/test.enc -p osc2026 -k testkey -d 90m
 ```
 
+- `-m` — mode: `test` for practice sessions (results go to the test dashboard), `eval` for the real event. **Use `test` for now.**
 - `-i` — your student ID (the one you registered with, e.g. `2023001`)
 - `-a` — path to `test.enc`
 - `-p` — password (given above)

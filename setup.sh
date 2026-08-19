@@ -67,6 +67,78 @@ detect_pkg_mgr() {
     else echo unknown; fi
 }
 
+MIN_GO="1.26"   # go.mod requirement; older toolchains cannot build the module
+GO_URL_BASE="https://go.dev/dl"
+
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo amd64 ;;
+        aarch64|arm64) echo arm64 ;;
+        *) echo "" ;;
+    esac
+}
+
+# Fetch the latest stable Go version from go.dev (e.g. "1.26.6").
+fetch_latest_go() {
+    local v
+    v=$(curl -fsSL --max-time 15 "https://go.dev/VERSION?m=text" 2>/dev/null | head -1 | tr -d ' \n')
+    case "$v" in
+        go[0-9]*.[0-9]*.[0-9]*) echo "${v#go}" ;;
+        *) echo "" ;;
+    esac
+}
+
+go_major_minor() {
+    go version 2>/dev/null | sed -n 's/.*go\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p'
+}
+
+# true if the `go` on PATH is new enough to build the module.
+have_go_new_enough() {
+    need go || return 1
+    local v
+    v=$(go_major_minor)
+    [ -n "$v" ] && [ "$(printf '%s\n%s\n' "$MIN_GO" "$v" | sort -V | head -1)" = "$MIN_GO" ]
+}
+
+# Ensure a Go toolchain new enough to build (distro packages are often ancient:
+# Ubuntu 22.04 ships 1.18, Debian bookworm 1.19, Fedora 39 1.21 — all fail on a
+# `go 1.26` module). Fall back to the latest official tarball, like CI does.
+ensure_go() {
+    if have_go_new_enough; then
+        log "go $MIN_GO+ detected: $(go version)"
+        return
+    fi
+
+    local arch
+    arch=$(detect_arch)
+    if [ -z "$arch" ]; then
+        die "unsupported architecture $(uname -m); install Go >= $MIN_GO manually"
+    fi
+
+    local ver
+    ver=$(fetch_latest_go)
+    if [ -z "$ver" ]; then
+        warn "could not query go.dev for the latest version; falling back to $MIN_GO.0"
+        ver="$MIN_GO.0"
+    fi
+
+    log "distro Go too old or missing; installing Go $ver (linux/$arch) from go.dev ..."
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    curl -fsSL "$GO_URL_BASE/go$ver.linux-$arch.tar.gz" -o "$tmp/go.tgz"
+    if [ -d /usr/local/go ]; then
+        sudo rm -rf /usr/local/go
+    fi
+    sudo tar -C /usr/local -xzf "$tmp/go.tgz"
+    rm -rf "$tmp"
+    trap - EXIT
+
+    export PATH=/usr/local/go/bin:$PATH
+    need go || die "failed to install Go"
+    log "installed: $(go version)"
+}
+
 install_deps() {
     [ "${QO_SKIP_DEPS:-0}" = "1" ] && { log "skipping package install (QO_SKIP_DEPS=1)"; return; }
 
@@ -77,32 +149,28 @@ install_deps() {
     case "$mgr" in
         apt)
             sudo apt-get update -y
-            sudo apt-get install -y git golang-go gcc libc6-dev tar gzip curl ca-certificates
+            sudo apt-get install -y git tar gzip curl ca-certificates
             ;;
         dnf|microdnf)
             if command -v sudo >/dev/null 2>&1; then
-                sudo dnf install -y git golang gcc glibc-devel tar gzip curl ca-certificates
+                sudo dnf install -y git tar gzip curl ca-certificates
             else
-                dnf install -y git golang gcc glibc-devel tar gzip curl ca-certificates
+                dnf install -y git tar gzip curl ca-certificates
             fi
             ;;
         pacman)
-            sudo pacman -Sy --noconfirm --needed git go gcc tar gzip curl ca-certificates
+            sudo pacman -Sy --noconfirm --needed git tar gzip curl ca-certificates
             ;;
         zypper)
-            sudo zypper install -y git go gcc glibc-devel tar gzip curl ca-certificates
+            sudo zypper install -y git tar gzip curl ca-certificates
             ;;
         apk)
-            apk add --no-cache git go gcc musl-dev tar gzip curl ca-certificates
+            apk add --no-cache git tar gzip curl ca-certificates
             ;;
         *)
-            warn "unsupported package manager; assuming go is already installed"
+            warn "unsupported package manager; assuming git/tar/curl are already installed"
             ;;
     esac
-
-    if ! need go; then
-        warn "go is not on PATH; install it from https://go.dev/dl/ or re-run with QO_SKIP_DEPS=0"
-    fi
 }
 
 build_and_install() {
@@ -153,9 +221,11 @@ fi
 if [ -f ./main.go ] && [ -d ./pkg ]; then
     log "building from local checkout: $PWD"
     install_deps
+    ensure_go
     build_and_install "$PWD"
 else
     install_deps
+    ensure_go
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
     log "cloning $REPO_URL ..."
