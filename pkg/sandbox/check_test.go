@@ -201,7 +201,7 @@ func TestCheckSocketRoundTrip(t *testing.T) {
 	levelDir := filepath.Join(ChallengesDir, "level1")
 	os.MkdirAll(levelDir, 0700)
 	os.WriteFile(filepath.Join(levelDir, "check.sh"),
-		[]byte("#!/bin/bash\nif [ -d \"$PWD/answer\" ]; then echo 'Level 1 passed!'; echo \"key=\\\"LVL-1-K7Q4X\\\"\"; exit 0; else echo 'Level 1 failed: missing answer dir'; exit 1; fi\n"), 0755)
+		[]byte("#!/bin/bash\nif [ \"$1\" = \"answer\" ] && [ -d \"$PWD/answer\" ]; then echo 'Level 1 passed!'; echo \"key=\\\"LVL-1-K7Q4X\\\"\"; exit 0; else echo 'Level 1 failed: missing answer dir'; exit 1; fi\n"), 0755)
 	os.WriteFile(filepath.Join(levelDir, ".base_flag"), []byte(baseFlag), 0600)
 
 	// Simulate the student's work inside the sandbox (in their home, where
@@ -237,7 +237,7 @@ func TestCheckSocketRoundTrip(t *testing.T) {
 		{"admin-user", 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			header, body := runCheckRequest(t, tt.uid)
+			header, body := runCheckRequest(t, tt.uid, "answer")
 			if strings.HasPrefix(header, "QOCHECK 2") {
 				// Inside a user namespace only uid 0 is mapped, so dropping to
 				// uid 1000 legitimately fails there; real root hosts map it.
@@ -264,15 +264,23 @@ func TestCheckSocketRoundTrip(t *testing.T) {
 }
 
 // runCheckRequest dials the session socket using the qo-check protocol for the
-// given uid (as the sandbox user would) and returns the header and body.
-func runCheckRequest(t *testing.T, uid uint32) (string, string) {
+// given uid (as the sandbox user would) and returns the header and body. Any
+// args are relayed exactly like the stub passes "$@" through qo-check.
+func runCheckRequest(t *testing.T, uid uint32, args ...string) (string, string) {
 	t.Helper()
 	conn, err := net.Dial("unix", checkSocketHostPath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	req := fmt.Sprintf("check\tlevel1\t/home/ahmed/level1\t%d\t%d\n", uid, uid)
+	req := fmt.Sprintf("check\tlevel1\t/home/ahmed/level1\t%d\t%d", uid, uid)
+	if len(args) > 0 {
+		req += fmt.Sprintf("\t\t%d", len(args))
+		for _, a := range args {
+			req += "\t" + a
+		}
+	}
+	req += "\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
 		t.Fatal(err)
 	}

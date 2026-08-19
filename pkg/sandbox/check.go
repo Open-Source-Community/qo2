@@ -159,23 +159,27 @@ func handleCheckConnVerb(conn net.Conn, line, studentID string) {
 
 // checkRequest is a parsed request line from the stub.
 type checkRequest struct {
-	levelKey   string
-	cwd        string
-	uid        uint32
-	gid        uint32
-	studentID  string
+	levelKey  string
+	cwd       string
+	uid       uint32
+	gid       uint32
+	studentID string
+	args      []string
 }
 
-// readCheckRequestLine parses "check\t<levelKey>\t<cwd>\t<uid>\t<gid>" and
-// optionally "check\t...\t<studentID>" (added so the student ID travels with the
-// request instead of being captured once at session start).
+// readCheckRequestLine parses
+//
+//	check\t<levelKey>\t<cwd>\t<uid>\t<gid>
+//
+// with optional trailing fields when the request carries a student ID and/or
+// check.sh arguments (added so the student ID travels with the request instead
+// of being captured once at session start, and so ./check.sh <args> works):
+//
+//	check\t<levelKey>\t<cwd>\t<uid>\t<gid>\t<studentID>\t<argCount>\t<arg1>...\t<argN>
 func readCheckRequestLine(line string) (checkRequest, error) {
 	var req checkRequest
 	parts := strings.Split(strings.TrimRight(line, "\n"), "\t")
-	if len(parts) != 5 && len(parts) != 6 {
-		return req, fmt.Errorf("malformed request")
-	}
-	if parts[0] != "check" {
+	if len(parts) < 5 || parts[0] != "check" {
 		return req, fmt.Errorf("malformed request")
 	}
 	uid, errU := strconv.ParseUint(parts[3], 10, 32)
@@ -187,9 +191,21 @@ func readCheckRequestLine(line string) (checkRequest, error) {
 	req.cwd = parts[2]
 	req.uid = uint32(uid)
 	req.gid = uint32(gid)
-	if len(parts) == 6 {
-		req.studentID = parts[5]
+
+	rest := parts[5:]
+	if len(rest) == 0 {
+		return req, nil
 	}
+	req.studentID = rest[0]
+	rest = rest[1:]
+	if len(rest) == 0 {
+		return req, nil
+	}
+	n, err := strconv.Atoi(rest[0])
+	if err != nil || n < 0 || len(rest)-1 < n {
+		return req, fmt.Errorf("malformed arg count")
+	}
+	req.args = rest[1 : 1+n]
 	return req, nil
 }
 
@@ -227,7 +243,12 @@ func runLevelCheck(req checkRequest) (string, int, string, error) {
 		user = "root"
 	}
 
-	cmd := exec.Command("/bin/bash")
+	// Run bash with -s so the script text piped on stdin is executed and the
+	// relayed check.sh arguments become positional parameters ($1, $2, ...),
+	// exactly as if the student ran ./check.sh <args> directly.
+	cmdArgs := []string{"-s", "--"}
+	cmdArgs = append(cmdArgs, req.args...)
+	cmd := exec.Command("/bin/bash", cmdArgs...)
 	cmd.Dir = cwd // applied via chdir after the chroot, relative to the new root
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Chroot: Rootfs,
@@ -377,7 +398,7 @@ func WriteCheckStubs() (int, error) {
 		if err := os.MkdirAll(filepath.Dir(stub), 0755); err != nil {
 			return n, err
 		}
-		content := fmt.Sprintf("#!/bin/sh\n/bin/%s %s '%s'\nexit $?\n", checkClientName, checkSocketInChroot, lvl)
+		content := fmt.Sprintf("#!/bin/sh\n/bin/%s %s '%s' \"$@\"\nexit $?\n", checkClientName, checkSocketInChroot, lvl)
 		if err := os.WriteFile(stub, []byte(content), 0755); err != nil {
 			return n, err
 		}
@@ -442,10 +463,16 @@ func RunCheckClient(args []string) int {
 	// Carry the session's student ID with the request (set by qo start via
 	// QO_STUDENT_ID and inherited into the sandbox shell). The server prefers
 	// it over the ID captured at session start, so flags and leaderboard rows
-	// always match the session that actually ran the check.
+	// always match the session that actually ran the check. Any arguments the
+	// student passed to ./check.sh are relayed too.
 	req := fmt.Sprintf("check\t%s\t%s\t%d\t%d", level, cwd, os.Getuid(), os.Getgid())
-	if sid := os.Getenv("QO_STUDENT_ID"); sid != "" {
+	sid := os.Getenv("QO_STUDENT_ID")
+	if sid != "" || len(args) > 2 {
 		req += "\t" + sid
+		req += fmt.Sprintf("\t%d", len(args)-2)
+		for _, a := range args[2:] {
+			req += "\t" + a
+		}
 	}
 	req += "\n"
 	if _, err := io.WriteString(conn, req); err != nil {
