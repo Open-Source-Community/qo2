@@ -587,10 +587,34 @@ func provisionTool(name string) error {
 		return err
 	}
 
-	// Find all shared library dependencies using ldd
+	// Provision all shared library dependencies, transitively (ldd on the tool,
+	// then on each library), so the chroot never mixes libraries from the build
+	// distro's embedded rootfs with the host distro's.
+	return provisionDeps(path)
+}
+
+// provisionDeps copies every shared library the given ELF file depends on from
+// the host into the sandbox, recursing through transitive dependencies. Direct
+// deps alone are not enough: host ls/mkdir link libselinux, which itself needs
+// libpcre2 — if only ls's direct deps are copied, the embedded Arch libpcre2
+// stays behind and produces "no version information available" warnings (or
+// worse) when a Fedora/Ubuntu host binary loads it.
+func provisionDeps(path string) error {
+	visited := map[string]bool{}
+	return provisionDepsRec(path, visited)
+}
+
+func provisionDepsRec(path string, visited map[string]bool) error {
+	if visited[path] {
+		return nil
+	}
+	visited[path] = true
+
 	out, err := exec.Command("ldd", path).Output()
 	if err != nil {
-		return err
+		// Not a dynamic executable (static binary), or ldd missing — nothing
+		// more to do for this file.
+		return nil
 	}
 
 	for _, line := range strings.Split(string(out), "\n") {
@@ -598,7 +622,7 @@ func provisionTool(name string) error {
 		var libSrc string
 
 		if strings.Contains(line, "=>") {
-			// Standard lib line: "libfoo.so.X => /real/path/libfoo.so.X (0x...)"
+			// "libfoo.so.X => /real/path/libfoo.so.X (0x...)"
 			parts := strings.Fields(line)
 			if len(parts) >= 3 && strings.HasPrefix(parts[2], "/") {
 				libSrc = parts[2]
@@ -611,12 +635,15 @@ func provisionTool(name string) error {
 			}
 		}
 
-		if libSrc == "" {
+		if libSrc == "" || visited[libSrc] {
 			continue
 		}
 
 		// Provision the library preserving host paths (cross-distro compatible)
-		_ = provisionLib(libSrc)
+		if err := provisionLib(libSrc); err != nil {
+			continue
+		}
+		_ = provisionDepsRec(libSrc, visited)
 	}
 	return nil
 }
