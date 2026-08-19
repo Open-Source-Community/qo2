@@ -17,6 +17,8 @@ import (
 	"syscall"
 
 	"sync"
+
+	"github.com/ahmedYasserM/qo/pkg/logger"
 )
 
 //go:embed rootfs.tar.gz
@@ -161,7 +163,39 @@ func (s *SandboxSession) Close() error {
 
 // Rootfs extraction
 
+// ensureRootfsMount places the rootfs on a private tmpfs. Hardened distros
+// often mount /tmp (or the filesystem beneath it) noexec, which makes execve of
+// the provisioned /bin/bash fail with "permission denied" — the exact error seen
+// on some Arch setups. A fresh tmpfs mounts exec by default, so the sandbox
+// works regardless of the parent mount's flags. Best-effort: if we cannot mount
+// (e.g. running without CAP_SYS_ADMIN) we log and continue — systems with a
+// plain exec /tmp keep working.
+func ensureRootfsMount() error {
+	if err := os.MkdirAll(Rootfs, 0755); err != nil {
+		return err
+	}
+	var self, parent syscall.Statfs_t
+	if err := syscall.Statfs(Rootfs, &self); err != nil {
+		return err
+	}
+	if err := syscall.Statfs(filepath.Dir(Rootfs), &parent); err != nil {
+		return err
+	}
+	if self.Fsid != parent.Fsid {
+		return nil // already its own mount (tmpfs from a previous run)
+	}
+	if err := syscall.Mount("tmpfs", Rootfs, "tmpfs", syscall.MS_NOSUID, "mode=0755,size=512m"); err != nil {
+		logger.Warn(fmt.Sprintf("rootfs tmpfs mount unavailable (%v); relying on %s mount flags", err, Rootfs))
+		return nil
+	}
+	logger.Info("sandbox rootfs mounted on a private tmpfs (exec enabled)")
+	return nil
+}
+
 func ExtractRootfs() error {
+	if err := ensureRootfsMount(); err != nil {
+		return err
+	}
 	if pathExists(Rootfs) {
 		_ = os.RemoveAll(Rootfs)
 	}
