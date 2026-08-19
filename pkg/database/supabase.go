@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ahmedYasserM/qo/pkg/logger"
@@ -16,10 +17,19 @@ import (
 )
 
 const (
-	API_URL     string = "https://fzyrnorpiiahggrywtfk.supabase.co"
-	API_KEY     string = "sb_publishable_Jn6qoCASApvAjfhtqyIu0A_IMbOMqFt"
+	API_URL     string = "https://rtfamwipfqysagxwbtjd.supabase.co"
+	API_KEY     string = "sb_publishable_qDI7vzI16KtLBD1fHA-X1A_trhf4blM"
 	QONGIF_FILE string = "qonfig.json"
 )
+
+// SubmissionTable selects where level submissions are recorded. Empty means
+// auto-detect from the level key prefix ("test1".."test10" -> test_submissions,
+// anything else -> submissions). cmd/start.go sets it explicitly via -m/--mode
+// so the instructor chooses the destination table up front.
+var SubmissionTable string
+
+// SessionSource tags session-log entries (eval|test). Set by -m/--mode.
+var SessionSource = "eval"
 
 func getConfigDir() string {
 	home, err := os.UserHomeDir()
@@ -220,6 +230,11 @@ func (client *SupabaseClient) Close() {
 // and no idempotency key. This is the check-execution integration point for the
 // CLI flow and must not exit the process, so it deliberately avoids the
 // log.Fatalf paths in Initialize.
+//
+// The destination table is chosen by SubmissionTable (set via qo start -m):
+// "test_submissions" for the practice archive, "submissions" for the real
+// event. When SubmissionTable is empty the level-key prefix is used as a
+// fallback ("test1".."test10" -> test_submissions).
 func SendLeaderboardFlag(studentID, questionID, flag string) {
 	sb, err := supabase.NewClient(
 		API_URL,
@@ -231,21 +246,53 @@ func SendLeaderboardFlag(studentID, questionID, flag string) {
 		return
 	}
 
-	// Anonymous sign-in, same call as SupabaseClient.Initialize but without the
-	// log.Fatalf wrapper so a network failure is handled gracefully.
-	resp, err := sb.Auth.Signup(types.SignupRequest{})
-	if err != nil {
-		logger.Warn(fmt.Sprintf("Leaderboard sync skipped (auth failed): %v", err))
-		return
-	}
-	sb.UpdateAuthSession(resp.Session)
+	// No session is needed: the client already authenticates every request with
+	// the anon key (Authorization: Bearer <key>), which PostgREST maps to the
+	// "anon" role. RLS policies grant that role INSERT access to the tables we
+	// write, so the Signup() session dance is both unnecessary and a failure
+	// point (anonymous sign-ins are disabled on the project).
 
-	_, _, err = sb.From("submissions").Insert(map[string]interface{}{
+	table := SubmissionTable
+	if table == "" {
+		table = "submissions"
+		if strings.HasPrefix(questionID, "test") {
+			table = "test_submissions"
+		}
+	}
+
+	_, _, err = sb.From(table).Insert(map[string]interface{}{
 		"student_id":  studentID,
 		"question_id": questionID,
 		"flag":        flag,
 	}, false, "", "minimal", "").Execute()
 	if err != nil {
-		logger.Warn(fmt.Sprintf("Leaderboard sync failed: %v", err))
+		logger.Warn(fmt.Sprintf("Leaderboard sync failed (%s): %v", table, err))
+	}
+}
+
+// ReportStudentEntry records that a student's sandbox session was started, so
+// the admin "who entered / who didn't" page knows who actually showed up. It is
+// best-effort and never blocks session startup: the caller should run it in a
+// goroutine. The source column is SessionSource (eval|test).
+func ReportStudentEntry(studentID string) {
+	sb, err := supabase.NewClient(
+		API_URL,
+		API_KEY,
+		&supabase.ClientOptions{},
+	)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("Session entry sync skipped (client init failed): %v", err))
+		return
+	}
+
+	// Same as SendLeaderboardFlag: authenticate with the anon key directly and
+	// rely on the RLS insert policy for the anon role.
+
+	_, _, err = sb.From("session_logs").Insert(map[string]interface{}{
+		"student_id": studentID,
+		"source":     SessionSource,
+	}, false, "", "minimal", "").Execute()
+	if err != nil {
+		logger.Warn(fmt.Sprintf("Session entry sync failed: %v", err))
 	}
 }
