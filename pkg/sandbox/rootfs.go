@@ -31,6 +31,26 @@ var (
 	defaultUser   = "ahmed"
 )
 
+// manAllowlist is the finalized set of man topics students may read through the
+// sandbox command loop. Admin account-management commands (useradd, passwd,
+// usermod, groupadd, groupdel) are intentionally excluded even if a matching
+// man page is later added to the rootfs: the allowlist is the enforcement point,
+// not the filesystem.
+var manAllowlist = map[string]bool{
+	"bunzip2": true, "bzip2": true, "cat": true, "chgrp": true, "chmod": true,
+	"chown": true, "cp": true, "curl": true, "cut": true, "doas": true,
+	"doas.conf": true, "file": true, "find": true, "grep": true, "groups": true,
+	"gunzip": true, "gzip": true, "head": true, "id": true, "join": true,
+	"kill": true, "killall": true, "less": true, "ln": true, "ls": true,
+	"man": true, "man.conf": true, "mkdir": true, "more": true, "mv": true,
+	"paste": true, "pgrep": true, "ping": true, "pkill": true, "ps": true,
+	"rm": true, "rmdir": true, "sed": true, "sort": true, "ssh": true,
+	"stat": true, "su": true, "sudo": true, "sudo.conf": true, "tail": true,
+	"tar": true, "top": true, "touch": true, "tr": true, "uname": true,
+	"uniq": true, "unzip": true, "uptime": true, "wc": true, "wget": true,
+	"whoami": true, "zip": true,
+}
+
 // Sandbox session
 
 type SandboxSession struct {
@@ -380,7 +400,18 @@ func runSessionLoop() error {
 		}
 
 		if strings.HasPrefix(cmdStr, "man ") {
-			topic := strings.TrimPrefix(cmdStr, "man ")
+			fields := strings.Fields(strings.TrimPrefix(cmdStr, "man "))
+			if len(fields) == 0 {
+				fmt.Println("usage: man <topic>")
+				fmt.Println(sentinel)
+				continue
+			}
+			topic := fields[0]
+			if !manAllowlist[topic] {
+				fmt.Printf("No man page for %s\n", topic)
+				fmt.Println(sentinel)
+				continue
+			}
 			cmdStr = fmt.Sprintf(
 				"f=$(find /usr/share/man -name '%s.*' 2>/dev/null | head -1); "+
 					"[ -z \"$f\" ] && echo 'No man page for %s' && exit; "+
