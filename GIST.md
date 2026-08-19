@@ -4,27 +4,13 @@
 
 ## 1. Install `qo`
 
-Download the **`qo`** binary and **`setup.sh`** from the drive (see step 2 — the same
-folder as `test.enc`), save both in your home folder, then:
+Open a terminal and run:
 
 ```bash
-cd ~
-chmod +x qo setup.sh
-./setup.sh ./qo
+curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/main/setup.sh | bash
 ```
 
-The script installs `qo` to `/usr/local/bin` and creates the `qo-check`,
-`qo-setup`, and `qo-reset` aliases it needs.
-
-> No script? Install manually:
->
-> ```bash
-> chmod +x qo
-> sudo mv qo /usr/local/bin/qo
-> sudo ln -sf /usr/local/bin/qo /usr/local/bin/qo-check
-> sudo ln -sf /usr/local/bin/qo /usr/local/bin/qo-setup
-> sudo ln -sf /usr/local/bin/qo /usr/local/bin/qo-reset
-> ```
+The script detects your distro, installs the required tools (Go, tar, gzip), clones the source, builds `qo` as a static binary, and installs it to `/usr/local/bin/qo` with the `qo-check`, `qo-setup`, and `qo-reset` aliases it needs.
 
 Verify:
 
@@ -32,14 +18,22 @@ Verify:
 qo --help
 ```
 
+> No network access? Download the prebuilt **`qo`** binary and **`setup.sh`** from
+> the drive folder (step 2), save both in your home folder, then:
+>
+> ```bash
+> cd ~
+> chmod +x qo setup.sh
+> ./setup.sh ./qo
+> ```
+
 ## 2. Download the test archive
 
 Get the practice archive from the drive:
 
 **https://drive.google.com/drive/folders/1nhKUefmOJ8FNPSUXz4sXmCMmDvnXtsc3?usp=sharing**
 
-Download `test.enc` (and `qo` + `setup.sh` from step 1, if you haven't) and save
-them in your home folder.
+Download `test.enc` and save it in your home folder.
 
 ## 3. Start the practice session
 

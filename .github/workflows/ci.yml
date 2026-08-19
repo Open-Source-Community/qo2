@@ -2,9 +2,9 @@ name: QO2 Multi-Distro CI
 
 on:
   push:
-    branches: [ ctf-improvements ]
+    branches: [ main, ctf-improvements ]
   pull_request:
-    branches: [ ctf-improvements ]
+    branches: [ main, ctf-improvements ]
 
 jobs:
   unit-tests:
@@ -39,7 +39,9 @@ jobs:
 
       - name: Run Distro Container Build & Test Verification
         run: |
-          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace ${{ matrix.distro }} /bin/bash -c "
+          # SYS_ADMIN lets the root-gated sandbox tests bind-mount /dev/null
+          # into the chroot (TestCheckSocketRoundTrip); it is not granted by default.
+          docker run --rm --cap-add SYS_ADMIN -v ${{ github.workspace }}:/workspace -w /workspace ${{ matrix.distro }} /bin/bash -c "
             set -e
             if command -v apt-get >/dev/null; then
               apt-get update && apt-get install -y sqlite3 git tar zip gzip bzip2 curl

@@ -6,14 +6,13 @@
 # qo-check / qo-setup / qo-reset aliases the sandbox uses.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/ctf-improvements/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/main/setup.sh | bash
 #
 # Or from a checkout:
 #   ./setup.sh
 #
-# If the qo2 repo is private (it is), the curl/clone path above will not work —
-# that flow is for public checkouts only. For private repos, distribute the
-# static binary directly (e.g. alongside test.enc) and install it with:
+# No network access to the repo? Distribute the static binary directly
+# (e.g. alongside test.enc) and install it with:
 #   ./setup.sh ./qo        # path to the downloaded qo binary
 #   ./setup.sh qo          # or any local file
 #
@@ -141,8 +140,7 @@ if [ "$1" = "uninstall" ]; then
 fi
 
 # Prebuilt binary path: if a local qo binary is given (or present in cwd),
-# install it directly. This is the flow for private-repo distribution — the
-# clone/curl paths below need the repo to be public.
+# install it directly without cloning or building.
 if [ -n "$1" ] && [ -f "$1" ]; then
     install_binary "$1"
     exit 0
@@ -161,7 +159,7 @@ else
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
     log "cloning $REPO_URL ..."
-    git clone --depth=1 "$REPO_URL" "$TMP_DIR/qo2" || die "cannot clone $REPO_URL — the repo is private; download the qo binary and run: ./setup.sh ./qo"
+    git clone --depth=1 "$REPO_URL" "$TMP_DIR/qo2" || die "cannot clone $REPO_URL — check your network/git access, or download the qo binary and run: ./setup.sh ./qo"
     build_and_install "$TMP_DIR/qo2"
 fi
 
