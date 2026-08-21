@@ -1,6 +1,6 @@
 # Linux evaluation '26 — Setup & Test Instructions
 
-> **Important:** run this on a Linux machine (Arch, Debian/Ubuntu, Fedora, OpenSUSE, Alpine all work). You need `sudo` access.
+> **Important:** run this on a Linux machine (Ubuntu 22.04+, Fedora 36+, Debian 12+, Arch all work). You need `sudo` access.
 
 ## 1. Install `qo`
 
@@ -10,7 +10,7 @@ Open a terminal and run:
 curl -fsSL https://raw.githubusercontent.com/Open-Source-Community/qo2/main/setup.sh | bash
 ```
 
-The script detects your distro, installs the required tools (Go, tar, gzip), clones the source, builds `qo` as a static binary, and installs it to `/usr/local/bin/qo` with the `qo-check`, `qo-setup`, and `qo-reset` aliases it needs.
+This downloads a prebuilt binary — no Go installation needed. It installs to `/usr/local/bin/qo` and creates symlinks so `sudo qo` works on all distros.
 
 Verify:
 
@@ -18,13 +18,19 @@ Verify:
 qo --help
 ```
 
-> No network access? Download the prebuilt **`qo`** binary and **`setup.sh`** from
-> the drive folder (step 2), save both in your home folder, then:
+> **Having issues?** If `sudo qo` says "command not found", the script may not have installed correctly. Try:
 >
 > ```bash
-> cd ~
-> chmod +x qo setup.sh
-> ./setup.sh ./qo
+> sudo /usr/local/bin/qo --help
+> ```
+>
+> If that works, the symlinks are missing. Re-run the setup script, or manually create them:
+>
+> ```bash
+> sudo ln -sf /usr/local/bin/qo /usr/bin/qo
+> sudo ln -sf /usr/local/bin/qo-check /usr/bin/qo-check
+> sudo ln -sf /usr/local/bin/qo-setup /usr/bin/qo-setup
+> sudo ln -sf /usr/local/bin/qo-reset /usr/bin/qo-reset
 > ```
 
 ## 2. Download the test archive
